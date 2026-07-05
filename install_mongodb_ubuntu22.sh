@@ -43,7 +43,7 @@ check_existing_installation() {
 
         choice="${choice,,}"  # تحويل إلى lowercase
 
-        case "${choice,,}" in
+        case "$choice" in
             r)
                 print_info "Stopping MongoDB service..."
 
@@ -61,7 +61,8 @@ check_existing_installation() {
                 echo
 
                 while true; do
-                    read -rp "Remove all MongoDB data? [y/N]: " remove_data
+                    # تعديل مهم: إضافة </dev/tty هنا لمنع السكربت من التعليق عند تشغيله عبر curl/wget
+                    read -rp "Remove all MongoDB data? [y/N]: " remove_data </dev/tty
 
                     case "${remove_data,,}" in
                         y|yes)
@@ -126,13 +127,16 @@ sudo apt-get install -y mongodb-org
 
 print_step "Step 5/6 - Enable and start MongoDB"
 
-sudo service mongod start
+# يفضل استخدام systemctl الحديث بدلاً من service لضمان التوافق مع التمكين التلقائي عند الإقلاع
+sudo systemctl daemon-reload
+sudo systemctl enable mongod
+sudo systemctl start mongod
 
 print_info "Waiting for MongoDB to start..."
 
 sleep 2
 
-sudo service mongod status
+print_step "Step 6/6 - Verify Installation"
 
 echo
 print_info "MongoDB version:"
@@ -140,3 +144,4 @@ mongod --version | head -n 1
 
 echo
 print_info "MongoDB service status:"
+sudo systemctl status mongod --no-pager -l 
