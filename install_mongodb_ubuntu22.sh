@@ -13,15 +13,98 @@ print_info() {
     echo "[INFO] $1"
 }
 
+print_warning() {
+    echo "[WARNING] $1"
+}
+
 print_error() {
     echo "[ERROR] $1"
 }
+
+check_existing_installation() {
+    print_step "Checking existing MongoDB installation"
+
+    if ! dpkg -s mongodb-org >/dev/null 2>&1; then
+        print_info "MongoDB is not installed."
+        return
+    fi
+
+    print_warning "MongoDB is already installed."
+    echo
+
+    while true; do
+        echo "Choose an option:"
+        echo "  [R] Remove MongoDB and reinstall"
+        echo "  [E] Exit"
+        echo
+
+        read -rp "Selection: " choice
+
+        case "${choice,,}" in
+            r)
+                print_info "Stopping MongoDB service..."
+
+                sudo systemctl stop mongod 2>/dev/null || true
+                sudo systemctl disable mongod 2>/dev/null || true
+
+                print_info "Removing MongoDB packages..."
+
+                sudo apt-get purge -y mongodb-org*
+                sudo apt-get autoremove -y
+
+                sudo rm -f /etc/apt/sources.list.d/mongodb-org-8.0.list
+                sudo rm -f /usr/share/keyrings/mongodb-server-8.0.gpg
+
+                echo
+
+                while true; do
+                    read -rp "Remove all MongoDB data? [y/N]: " remove_data
+
+                    case "${remove_data,,}" in
+                        y|yes)
+                            print_info "Removing MongoDB data..."
+
+                            sudo rm -rf /var/lib/mongodb
+                            sudo rm -rf /var/log/mongodb
+
+                            break
+                            ;;
+
+                        n|no|"")
+                            print_info "Keeping MongoDB data."
+                            break
+                            ;;
+
+                        *)
+                            print_error "Invalid selection."
+                            ;;
+                    esac
+                done
+
+                print_info "Previous MongoDB installation removed."
+
+                break
+                ;;
+
+            e)
+                print_info "Installation cancelled."
+                exit 0
+                ;;
+
+            *)
+                print_error "Invalid selection."
+                ;;
+        esac
+    done
+}
+
+check_existing_installation
 
 print_step "Step 1/6 - Install required packages"
 
 sudo apt-get update -y
 sudo apt-get install -y curl gnupg 
-
+    
 print_step "Step 2/6 - Add MongoDB GPG key"
 
 curl -fsSL https://pgp.mongodb.com/server-8.0.asc | \
@@ -40,22 +123,13 @@ sudo apt-get install -y mongodb-org
 
 print_step "Step 5/6 - Enable and start MongoDB"
 
-sudo systemctl enable mongod
+sudo service mongod start
 
-if ! sudo systemctl is-active --quiet mongod; then
-    print_info "Starting MongoDB service..."
-    sudo systemctl start mongod
-fi
+print_info "Waiting for MongoDB to start..."
 
-print_step "Step 6/6 - Verify installation"
+sleep 2
 
-if sudo systemctl is-active --quiet mongod; then
-    print_info "MongoDB is running successfully."
-else
-    print_error "MongoDB failed to start."
-    sudo systemctl status mongod --no-pager
-    exit 1
-fi
+sudo service mongod status
 
 echo
 print_info "MongoDB version:"
@@ -63,4 +137,3 @@ mongod --version | head -n 1
 
 echo
 print_info "MongoDB service status:"
-sudo systemctl --no-pager --full status mongod
