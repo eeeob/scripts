@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# Cloudflare DDNS / DNS Updater Script (Curl-Safe & Interactive)
+# Cloudflare DDNS / DNS Updater Script (Curl-Safe & Bulletproof Parsing)
 # ==============================================================================
-# This version is safe to run via: bash <(curl -fsSL your-url)
+# This version fixes the grep hang issue and is 100% safe to run via:
+#   bash <(curl -fsSL your-url) OR bash <(wget -qO- your-url)
 # ==============================================================================
 
 set -e
@@ -30,12 +31,11 @@ while getopts "t:z:d:" opt; do
     esac
 done
 
-# --- 2. التحقق التفاعلي من المدخلات (مُعدّل ليعمل مع curl) ---
+# --- 2. التحقق التفاعلي من المدخلات ---
 
 # التحقق من توكن كلواد فلير
 if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
     print_warning "Cloudflare API Token parameter (-t) is missing."
-    # تفعيل القراءة من الـ tty مباشرة لجعل الـ curl يعمل دون تعليق
     read -s -p "Please enter your Cloudflare API Token: " input_token </dev/tty
     echo "" 
     while [ -z "$input_token" ]; do
@@ -75,7 +75,7 @@ echo "--------------------------------------------------"
 
 # --- 3. جلب الآي بي العام الحالي للسيرفر ---
 print_info "Fetching current server public IP..."
-CURRENT_IP=$(curl -s --max-time 10 https://api.ipify.org)
+CURRENT_IP=$(curl -s --max-time 10 https://api.ipify.org || echo "")
 
 if [ -z "$CURRENT_IP" ]; then
     print_error "Failed to fetch public IP from api.ipify.org. Exiting."
@@ -95,8 +95,9 @@ if [[ "$DNS_RECORD_INFO" == *"\"success\":false"* ]]; then
     exit 1
 fi
 
-RECORD_ID=$(echo "$DNS_RECORD_INFO" | grep -o '"id":"[^"]*' | head -n1 | grep -o '[^"]*$')
-CLOUDFLARE_IP=$(echo "$DNS_RECORD_INFO" | grep -o '"content":"[^"]*' | head -n1 | grep -o '[^"]*$')
+# استخدام sed الآمن بدلاً من grep المستهلك للمدخلات والذي يتسبب في التعليق
+RECORD_ID=$(echo "$DNS_RECORD_INFO" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -n1)
+CLOUDFLARE_IP=$(echo "$DNS_RECORD_INFO" | sed -n 's/.*"content":"\([^"]*\)".*/\1/p' | head -n1)
 
 # --- 5. اتخاذ القرار (إنشاء أو تحديث أو تخطي) ---
 if [ -z "$RECORD_ID" ]; then
@@ -131,4 +132,4 @@ else
         print_error "Failed to update DNS record."
         exit 1
     fi
-fi
+fi 
