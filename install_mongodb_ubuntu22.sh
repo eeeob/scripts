@@ -38,7 +38,10 @@ check_existing_installation() {
         echo "  [E] Exit"
         echo
 
-        read -rp "Selection: " choice
+        printf "Selection: "
+        read -r choice </dev/tty || true
+
+        choice="${choice,,}"  # تحويل إلى lowercase
 
         case "${choice,,}" in
             r)
