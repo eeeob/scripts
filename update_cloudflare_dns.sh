@@ -1,11 +1,9 @@
 #!/usr/bin/env bash
 
 # ==============================================================================
-# Cloudflare DDNS / DNS Updater Script (Hybrid: Params + Interactive)
+# Cloudflare DDNS / DNS Updater Script (Curl-Safe & Interactive)
 # ==============================================================================
-# Usage:
-#   ./update_dns.sh -t <API_TOKEN> -z <ZONE_ID> -d <DOMAIN_NAME>
-#   Or just run: ./update_dns.sh (and it will prompt you for missing inputs)
+# This version is safe to run via: bash <(curl -fsSL your-url)
 # ==============================================================================
 
 set -e
@@ -32,16 +30,17 @@ while getopts "t:z:d:" opt; do
     esac
 done
 
-# --- 2. التحقق التفاعلي من المدخلات (الطلب في حال الغياب) ---
+# --- 2. التحقق التفاعلي من المدخلات (مُعدّل ليعمل مع curl) ---
 
 # التحقق من توكن كلواد فلير
 if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
     print_warning "Cloudflare API Token parameter (-t) is missing."
-    read -s -p "Please enter your Cloudflare API Token: " input_token
-    echo "" # سطر جديد بعد إخفاء التوكن
+    # تفعيل القراءة من الـ tty مباشرة لجعل الـ curl يعمل دون تعليق
+    read -s -p "Please enter your Cloudflare API Token: " input_token </dev/tty
+    echo "" 
     while [ -z "$input_token" ]; do
         print_error "API Token cannot be empty!"
-        read -s -p "Please enter your Cloudflare API Token: " input_token
+        read -s -p "Please enter your Cloudflare API Token: " input_token </dev/tty
         echo ""
     done
     CLOUDFLARE_API_TOKEN=$input_token
@@ -50,10 +49,10 @@ fi
 # التحقق من Zone ID
 if [ -z "$CLOUDFLARE_ZONE_ID" ]; then
     print_warning "Cloudflare Zone ID parameter (-z) is missing."
-    read -p "Please enter your Cloudflare Zone ID: " input_zone
+    read -p "Please enter your Cloudflare Zone ID: " input_zone </dev/tty
     while [ -z "$input_zone" ]; do
         print_error "Zone ID cannot be empty!"
-        read -p "Please enter your Cloudflare Zone ID: " input_zone
+        read -p "Please enter your Cloudflare Zone ID: " input_zone </dev/tty
     done
     CLOUDFLARE_ZONE_ID=$input_zone
 fi
@@ -61,10 +60,10 @@ fi
 # التحقق من الدومين
 if [ -z "$DOMAIN" ]; then
     print_warning "Domain parameter (-d) is missing."
-    read -p "Please enter your Domain (e.g., app.example.com): " input_domain
+    read -p "Please enter your Domain (e.g., app.example.com): " input_domain </dev/tty
     while [ -z "$input_domain" ]; do
         print_error "Domain cannot be empty!"
-        read -p "Please enter your Domain: " input_domain
+        read -p "Please enter your Domain: " input_domain </dev/tty
     done
     DOMAIN=$input_domain
 fi
