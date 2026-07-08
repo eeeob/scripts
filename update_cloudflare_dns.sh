@@ -23,7 +23,7 @@ print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
 
 # --- 1. قراءة الـ Parameters في حال تم تمريرها ---
 while getopts "t:z:d:" opt; do
-    case " ${opt} " in
+    case "${opt}" in
         t) CLOUDFLARE_API_TOKEN="${OPTARG}" ;;
         z) CLOUDFLARE_ZONE_ID="${OPTARG}" ;;
         d) DOMAIN="${OPTARG}" ;;
