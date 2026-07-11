@@ -37,6 +37,7 @@ check_existing_installation() {
         read -rp "Do you want to start the MongoDB service now? [y/N]: " start_choice </dev/tty || true
         if [[ "${start_choice,,}" =~ ^y ]]; then
             print_info "Starting MongoDB service..."
+            sudo systemctl daemon-reload
             sudo systemctl start mongod
             print_info "MongoDB service started successfully."
         else
@@ -127,6 +128,14 @@ print_step "Step 4/6 - Install MongoDB"
 sudo apt-get install -y mongodb-org
 
 print_step "Step 5/6 - Enable and start MongoDB"
+
+SERVICE_FILE="/lib/systemd/system/mongod.service"
+if [ -f "$SERVICE_FILE" ]; then
+    if grep -q "MONGODB_CONFIG_OVERRIDE_NOFORK=1" "$SERVICE_FILE"; then
+        print_info "Detected conflicting NOFORK environment variable in mongod.service. Fixing automatically..."
+        sudo sed -i 's/Environment="MONGODB_CONFIG_OVERRIDE_NOFORK=1"/#Environment="MONGODB_CONFIG_OVERRIDE_NOFORK=1"/g' "$SERVICE_FILE"
+    fi
+fi
 
 # يفضل استخدام systemctl الحديث بدلاً من service لضمان التوافق مع التمكين التلقائي عند الإقلاع
 sudo systemctl daemon-reload
