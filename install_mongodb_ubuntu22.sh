@@ -26,80 +26,81 @@ check_existing_installation() {
 
     if ! dpkg -s mongodb-org >/dev/null 2>&1; then
         print_info "MongoDB is not installed."
-        return
+        return 0
     fi
 
     print_warning "MongoDB is already installed."
+    
+    # 1. التحقق مما إذا كانت الخدمة شغالة أم لا
+    if ! sudo systemctl is-active --quiet mongod; then
+        print_warning "MongoDB service is currently NOT running!"
+        read -rp "Do you want to start the MongoDB service now? [y/N]: " start_choice </dev/tty || true
+        if [[ "${start_choice,,}" =~ ^y ]]; then
+            print_info "Starting MongoDB service..."
+            sudo systemctl start mongod
+            print_info "MongoDB service started successfully."
+        else
+            print_info "Skipping starting MongoDB service."
+        fi
+    else
+        print_info "MongoDB service is already running and active."
+    fi
+
+    # 2. التحقق مما إذا كانت الخدمة مفعلة عند الإقلاع أم لا
+    if ! sudo systemctl is-enabled --quiet mongod; then
+        print_warning "MongoDB service is NOT enabled to start on reboot!"
+        read -rp "Do you want to enable MongoDB on system startup? [y/N]: " enable_choice </dev/tty || true
+        if [[ "${enable_choice,,}" =~ ^y ]]; then
+            print_info "Enabling MongoDB service on reboot..."
+            sudo systemctl enable mongod
+            print_info "MongoDB service enabled successfully."
+        else
+            print_info "Skipping enabling MongoDB on reboot."
+        fi
+    else
+        print_info "MongoDB service is already enabled for startup."
+    fi
+
+    echo
+    echo "Choose an option:"
+    echo "  [R] Remove MongoDB and reinstall"
+    echo "  [E] Exit / Continue setup"
     echo
 
-    while true; do
-        echo "Choose an option:"
-        echo "  [R] Remove MongoDB and reinstall"
-        echo "  [E] Exit"
-        echo
+    printf "Selection (default: Continue): "
+    read -r choice </dev/tty || true
+    choice="${choice,,}"
 
-        printf "Selection: "
-        read -r choice </dev/tty || true
+    case "$choice" in
+        r)
+            print_info "Stopping MongoDB service..."
+            sudo systemctl stop mongod 2>/dev/null || true
+            sudo systemctl disable mongod 2>/dev/null || true
 
-        choice="${choice,,}"  # تحويل إلى lowercase
+            print_info "Removing MongoDB packages..."
+            sudo apt-get purge -y mongodb-org*
+            sudo apt-get autoremove -y
 
-        case "$choice" in
-            r)
-                print_info "Stopping MongoDB service..."
+            sudo rm -f /etc/apt/sources.list.d/mongodb-org-8.0.list
+            sudo rm -f /usr/share/keyrings/mongodb-server-8.0.gpg
 
-                sudo systemctl stop mongod 2>/dev/null || true
-                sudo systemctl disable mongod 2>/dev/null || true
+            echo
+            read -rp "Remove all MongoDB data? [y/N]: " remove_data </dev/tty
+            if [[ "${remove_data,,}" =~ ^y ]]; then
+                print_info "Removing MongoDB data..."
+                sudo rm -rf /var/lib/mongodb
+                sudo rm -rf /var/log/mongodb
+            else
+                print_info "Keeping MongoDB data."
+            fi
 
-                print_info "Removing MongoDB packages..."
-
-                sudo apt-get purge -y mongodb-org*
-                sudo apt-get autoremove -y
-
-                sudo rm -f /etc/apt/sources.list.d/mongodb-org-8.0.list
-                sudo rm -f /usr/share/keyrings/mongodb-server-8.0.gpg
-
-                echo
-
-                while true; do
-                    # تعديل مهم: إضافة </dev/tty هنا لمنع السكربت من التعليق عند تشغيله عبر curl/wget
-                    read -rp "Remove all MongoDB data? [y/N]: " remove_data </dev/tty
-
-                    case "${remove_data,,}" in
-                        y|yes)
-                            print_info "Removing MongoDB data..."
-
-                            sudo rm -rf /var/lib/mongodb
-                            sudo rm -rf /var/log/mongodb
-
-                            break
-                            ;;
-
-                        n|no|"")
-                            print_info "Keeping MongoDB data."
-                            break
-                            ;;
-
-                        *)
-                            print_error "Invalid selection."
-                            ;;
-                    esac
-                done
-
-                print_info "Previous MongoDB installation removed."
-
-                break
-                ;;
-
-            e)
-                print_info "Installation cancelled."
-                exit 0
-                ;;
-
-            *)
-                print_error "Invalid selection."
-                ;;
-        esac
-    done
+            print_info "Previous MongoDB installation removed. Proceeding with fresh installation..."
+            ;;
+        *)
+            print_info "Continuing with existing MongoDB installation."
+            return 0
+            ;;
+    esac
 }
 
 check_existing_installation
