@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+
+
+print_step() {
+    echo
+    echo "=================================================="
+    echo " $1"
+    echo "=================================================="
+}
+
+print_info() {
+    echo "[INFO] $1"
+}
+
+print_warning() {
+    echo "[WARNING] $1"
+}
+
+print_error() {
+    echo -e "\e[31m[ERROR] $1\e[0m"
+}
+
+_prompt_required() {
+    local prompt_text="$1"
+    local out_var_name="$2"
+    local regex_pattern="${3:-}"
+    local secret_flag="${4:-}"
+
+    local input=""
+    local -a read_opts=()
+    [ "$secret_flag" = "--secret" ] && read_opts+=(-s)
+
+    while true; do
+        read "${read_opts[@]}" -p "$prompt_text" input </dev/tty
+        [ "$secret_flag" = "--secret" ] && echo ""
+
+        if [ -z "$input" ]; then
+            print_error "This value cannot be empty!"
+            continue
+        fi
+
+        if [ -n "$regex_pattern" ] && [[ ! "$input" =~ $regex_pattern ]]; then
+            print_error "Invalid value!"
+            continue
+        fi
+
+        break
+    done
+
+    printf -v "$out_var_name" '%s' "$input"
+}
+
+_confirm() {
+    local prompt_text="$1"
+
+    local response=""
+
+    read -p "$prompt_text" response </dev/tty
+    response=$(echo "$response" | tr '[:upper:]' '[:lower:]')
+    [[ "$response" =~ ^(y|yes)$ ]]
+}
+
+_check_variable_required() {
+    local var_name="$1"
+    local var_value="$2"
+    local regex_pattern="$3"
+
+    if [ -z "$var_value" ]; then
+        print_error "Validation Failed: Required variable '$var_name' is missing or empty!"
+        exit 1
+    fi
+
+    if [ -n "$regex_pattern" ] && [[ ! "$var_value" =~ $regex_pattern ]]; then
+        print_error "Validation Failed: Variable '$var_name' ('$var_value') does not match the required format!"
+        exit 1
+    fi
+}
+
+_ask_to_save_permanently() {
+    local var_name="$1"
+    local var_value="$2"
+
+    if ! _confirm "$(echo -e "\e[33m[?]\e[0m Do you want to save $var_name permanently to the server? (y/n): ")"; then
+        print_info "$var_name will be temporary for this script run only."
+        return 0
+    fi
+
+    local shell_profile=""
+    
+    if [ -f "/root/.bashrc" ]; then
+        shell_profile="/root/.bashrc"
+    elif [ -f "/root/.profile" ]; then
+        shell_profile="/root/.profile"
+    fi
+
+    if [ -z "$shell_profile" ]; then
+        print_warning "Could not find .bashrc or .profile to save $var_name permanently."
+        return 0
+    fi
+
+    sed -i "/export $var_name=/d" "$shell_profile"
+    echo "export $var_name=\"$var_value\"" >> "$shell_profile"
+    print_info "Saved $var_name permanently to $shell_profile"
+}
+
+_prompt_paste_file() {
+    local prompt_text="$1"
+    local target_file="$2"
+
+    echo
+    echo "================================================================="
+    echo " $prompt_text"
+    echo "================================================================="
+    echo "File to edit:"
+    echo " $target_file"
+    echo
+
+    read -p "Press ENTER to open the file..." </dev/tty
+    nano "$target_file" </dev/tty
+}
+
+_install_dependencies() {
+    if [ "$#" -eq 0 ]; then
+        print_error "No dependencies specified to install."
+        return 1
+    fi
+
+    print_step "Update system and install dependencies"
+    sudo apt-get update 
+    sudo apt-get install -y "$@"
+}
+
+_install_docker() {
+    print_step "Install Docker"
+
+    if command -v docker >/dev/null 2>&1; then
+        print_info "Docker is already installed."
+    else
+        print_info "Installing Docker from official repository..."
+
+        sudo install -m 0755 -d /etc/apt/keyrings
+
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+            | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+
+        sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+        echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
+
+        _install_dependencies docker-ce \
+            docker-ce-cli containerd.io \
+            docker-buildx-plugin docker-compose-plugin
+    fi
+
+    print_info "Checking Docker service status..."
+
+    if ! sudo systemctl is-active --quiet docker; then
+        print_warning "Docker service is not running. Starting it..."
+        sudo systemctl start docker
+    fi
+
+    if ! sudo systemctl is-enabled --quiet docker; then
+        print_warning "Docker service is not enabled. Enabling it..."
+        sudo systemctl enable docker >/dev/null 2>&1
+    else
+        print_info "Docker service already enabled."
+    fi
+
+    print_info "Docker service is running."
+
+    if ! groups "$USER" | grep -q docker; then
+        print_info "Adding user to docker group..."
+        sudo usermod -aG docker "$USER"
+    else
+        print_info "User already in docker group."
+    fi
+
+    print_info "Docker setup completed."
+}
+
+_clone_or_update_project() {
+    local repo_url="$1"
+    local project_dir="$2"
+    local branch="${3:-main}"
+
+    print_step "Clone or update project"
+
+    if [ -d "$project_dir/.git" ]; then
+        print_info "Project already exists. Pulling latest changes..."
+        cd "$project_dir"
+        git fetch --all
+        git reset --hard "origin/$branch"
+        return
+    fi
+
+    print_info "Cloning project..."
+    git clone "$repo_url" "$project_dir"
+}
+
+_render_template_file() {
+    local template_file="$1"
+    local output_file="$2"
+    shift 2
+    local -a template_vars=("$@")
+
+    local vars_list=""
+    local -a env_assignments=()
+    local arg var_name
+
+    for arg in "${template_vars[@]}"; do
+        if [[ "$arg" == *=* ]]; then
+            var_name="${arg%%=*}"
+            env_assignments+=("$arg")
+        else
+            var_name="$arg"
+        fi
+        vars_list+="\${$var_name} "
+    done
+
+    env "${env_assignments[@]}" envsubst "$vars_list" \
+        < "$template_file" \
+        | sudo tee "$output_file" > /dev/null
+}
+
+_create_systemd_service() {
+    local service_name="$1"
+    local template_file="$2"
+    shift 2
+    local -a template_vars=("$@")
+
+    print_step "Creating Systemd Service: ${service_name}"
+
+    local service_file="/etc/systemd/system/${service_name}.service"
+
+    if systemctl list-unit-files | grep -q "${service_name}.service" || [ -f "$service_file" ]; then
+        print_info "Existing service '${service_name}' detected. Stopping and removing it first..."
+
+        sudo systemctl stop "${service_name}.service" >/dev/null 2>&1 || true
+        sudo systemctl disable "${service_name}.service" >/dev/null 2>&1 || true
+        sudo rm -f "$service_file"
+        sudo systemctl daemon-reload
+        print_info "Old service successfully cleaned up."
+    fi
+
+    print_info "Configuring systemd service file at ${service_file}..."
+
+    _render_template_file "$template_file" "$service_file" "${template_vars[@]}"
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "${service_name}.service" >/dev/null 2>&1
+    print_info "✅ Systemd service ${service_name}.service successfully created and enabled."
+    print_info "for show logs run   sudo journalctl -u $service_name -e"
+}
+
+
+
+
