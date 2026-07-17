@@ -53,6 +53,12 @@ _prompt_required() {
 _confirm() {
     local prompt_text="$1"
 
+    # عند تمرير -y للسكربت يتم تفعيل ASSUME_YES فتتم الموافقة على كل التحققات تلقائياً
+    if [ "${ASSUME_YES:-no}" = "yes" ]; then
+        echo "${prompt_text}y (auto-approved by -y)"
+        return 0
+    fi
+
     local response=""
 
     read -p "$prompt_text" response </dev/tty

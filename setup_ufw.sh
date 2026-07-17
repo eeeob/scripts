@@ -5,6 +5,7 @@
 # يقوم بتفعيل UFW مع إبقاء SSH مفتوحاً، مع فحص الخدمات المتأثرة والقواعد القديمة
 # آمن للتشغيل المنفرد عبر:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/eeeob/scripts/main/setup_ufw.sh)
+# تمرير -y يوافق تلقائياً على جميع التحققات
 # ==============================================================================
 
 set -e
@@ -14,8 +15,25 @@ sudo apt-get update -y && sudo apt-get install -y curl && source <(curl -fsSL ht
 
 CONFIG_DIR="/root/.configs"
 CONFIG_FILE="$CONFIG_DIR/ufw_setup.conf"
+CONFIGS_BASE_URL="https://raw.githubusercontent.com/eeeob/configs/main/ufw"
 SSH_PORT="22"
 OLD_RULES_RESET="no"
+ASSUME_YES="no"
+
+while getopts "y" opt; do
+    case "${opt}" in
+        y) ASSUME_YES="yes" ;;
+        *) echo "Usage: $0 [-y]"; exit 1 ;;
+    esac
+done
+
+# تنزيل الملفات المساعدة الخاصة بالسكربت من مشروع configs
+ASSETS_DIR=$(mktemp -d)
+trap 'rm -rf "$ASSETS_DIR"' EXIT
+
+print_info "Downloading script assets from configs repo..."
+curl -fsSL "$CONFIGS_BASE_URL/affected_services.awk" -o "$ASSETS_DIR/affected_services.awk"
+curl -fsSL "$CONFIGS_BASE_URL/ufw_setup.conf.template" -o "$ASSETS_DIR/ufw_setup.conf.template"
 
 # --- التحقق من وجود ملف config قديم من تشغيل سابق ---
 check_existing_config() {
@@ -68,24 +86,7 @@ check_affected_services() {
     print_step "Checking services that may be affected"
 
     local affected
-    affected=$(sudo ss -tulnpH 2>/dev/null | awk -v ssh="$SSH_PORT" '
-        {
-            n = split($5, a, ":");
-            port = a[n];
-            proc = "unknown";
-            if (match($0, /users:\(\("[^"]+"/)) {
-                proc = substr($0, RSTART + 9, RLENGTH - 9);
-            }
-            # تجاهل الخدمات المستمعة على loopback فقط لأنها لا تتأثر بالجدار الناري
-            if ($5 ~ /^127\./ || $5 ~ /^\[::1\]/) next;
-            if (port == ssh) next;
-            key = $1 " " port " " proc;
-            if (!(key in seen)) {
-                seen[key] = 1;
-                printf "  - %s port %s (%s)\n", $1, port, proc;
-            }
-        }
-    ')
+    affected=$(sudo ss -tulnpH 2>/dev/null | awk -v ssh="$SSH_PORT" -f "$ASSETS_DIR/affected_services.awk")
 
     if [ -z "$affected" ]; then
         print_info "No public listening services found other than SSH. Safe to enable."
@@ -125,21 +126,16 @@ write_config() {
 
     sudo mkdir -p "$CONFIG_DIR"
 
-    sudo tee "$CONFIG_FILE" >/dev/null <<EOF
-CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')"
-UFW_ENABLED="yes"
-SSH_ALLOWED_VIA="OpenSSH"
-SSH_PORT="$SSH_PORT"
-DEFAULT_INCOMING="deny"
-DEFAULT_OUTGOING="allow"
-OLD_RULES_RESET="$OLD_RULES_RESET"
-EOF
+    _render_template_file "$ASSETS_DIR/ufw_setup.conf.template" "$CONFIG_FILE" \
+        CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
+        SSH_PORT="$SSH_PORT" \
+        OLD_RULES_RESET="$OLD_RULES_RESET"
 
     print_info "Config saved to $CONFIG_FILE"
 }
 
 check_existing_config
-_install_dependencies ufw
+_install_dependencies ufw gettext-base
 
 # اكتشاف بورت SSH الفعلي عبر الدالة العامة في utils.sh
 SSH_PORT=$(_detect_ssh_port)
