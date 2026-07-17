@@ -15,8 +15,7 @@ sudo apt-get update -y && sudo apt-get install -y curl && source <(curl -fsSL ht
 
 CONFIG_DIR="/root/.configs"
 CONFIG_FILE="$CONFIG_DIR/ufw_setup.conf"
-ASSETS_DIR="$CONFIG_DIR/ufw"
-CONFIGS_BASE_URL="https://raw.githubusercontent.com/eeeob/configs/main"
+CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
 SSH_PORT="22"
 OLD_RULES_RESET="no"
 
@@ -74,8 +73,7 @@ check_affected_services() {
     print_step "Checking services that may be affected"
 
     local affected
-    # sudo لأن ملف awk محفوظ داخل /root/.configs
-    affected=$(sudo ss -tulnpH 2>/dev/null | sudo awk -v ssh="$SSH_PORT" -f "$ASSETS_DIR/affected_services.awk")
+    affected=$(sudo ss -tulnpH 2>/dev/null | awk -v ssh="$SSH_PORT" -f "$ASSETS_DIR/ufw/affected_services.awk")
 
     if [ -z "$affected" ]; then
         print_info "No public listening services found other than SSH. Safe to enable."
@@ -115,7 +113,7 @@ write_config() {
 
     sudo mkdir -p "$CONFIG_DIR"
 
-    _render_template_file "$TEMPLATES_DIR/ufw_setup.conf.template" "$CONFIG_FILE" \
+    _render_template_file "$ASSETS_DIR/ufw/ufw_setup.conf.template" "$CONFIG_FILE" \
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
         SSH_PORT="$SSH_PORT" \
         OLD_RULES_RESET="$OLD_RULES_RESET"
@@ -130,15 +128,11 @@ _install_dependencies ufw gettext-base
 SSH_PORT=$(_detect_ssh_port)
 print_info "Detected SSH port: $SSH_PORT"
 
-# الملفات الحقيقية الجاهزة توضع في /root/.configs/ufw وتبقى بعد انتهاء السكربت
-print_info "Downloading script assets from configs repo..."
-sudo mkdir -p "$ASSETS_DIR"
-curl -fsSL "$CONFIGS_BASE_URL/ufw/affected_services.awk" | sudo tee "$ASSETS_DIR/affected_services.awk" >/dev/null
-
-# الـ templates تُجلب من GitHub وقت التشغيل فقط ولا تبقى على السيرفر
-TEMPLATES_DIR=$(mktemp -d)
-trap 'rm -rf "$TEMPLATES_DIR"' EXIT
-curl -fsSL "$CONFIGS_BASE_URL/ufw/ufw_setup.conf.template" -o "$TEMPLATES_DIR/ufw_setup.conf.template"
+# جلب الملفات المساعدة من مشروع configs إلى مجلد مؤقت يُحذف عند الخروج
+# لا يبقى على السيرفر إلا ملف الاعدادات النهائي الحقيقي في /root/.configs
+ASSETS_DIR=$(mktemp -d)
+trap 'rm -rf "$ASSETS_DIR"' EXIT
+_download_github_path "$CONFIGS_REPO_URL" "ufw" "$ASSETS_DIR/ufw"
 
 check_old_rules
 check_affected_services
