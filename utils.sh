@@ -279,6 +279,18 @@ _ensure_git_compatible() {
     print_info "Git $current_version is compatible (minimum required: $min_version)."
 }
 
+_detect_ssh_port() {
+    local detected_port=""
+
+    detected_port=$(sudo ss -tlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]; exit}')
+
+    if [ -z "$detected_port" ] && [ -f /etc/ssh/sshd_config ]; then
+        detected_port=$(grep -iE '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n1)
+    fi
+
+    echo "${detected_port:-22}"
+}
+
 _download_github_path() {
     local repo_url="$1"
     local repo_path="$2"

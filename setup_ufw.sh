@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
 # ==============================================================================
 # UFW Firewall Setup Script
@@ -34,20 +34,6 @@ check_existing_config() {
         print_info "Keeping the existing setup. Exiting without changes."
         exit 0
     fi
-}
-
-# --- اكتشاف بورت SSH الفعلي بدلاً من افتراض 22 ---
-detect_ssh_port() {
-    local detected_port=""
-
-    detected_port=$(sudo ss -tlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]; exit}')
-
-    if [ -z "$detected_port" ] && [ -f /etc/ssh/sshd_config ]; then
-        detected_port=$(grep -iE '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n1)
-    fi
-
-    SSH_PORT="${detected_port:-22}"
-    print_info "Detected SSH port: $SSH_PORT"
 }
 
 # --- التحقق من وجود قواعد UFW قديمة وتخيير المستخدم بإلغائها ---
@@ -110,7 +96,7 @@ check_affected_services() {
     echo
     echo "$affected"
     echo
-    print_info "SSH (port $SSH_PORT/tcp) will remain allowed."
+    print_info "SSH (port $SSH_PORT) will remain allowed via the OpenSSH profile."
 
     if ! _confirm "Do you want to continue and enable UFW anyway? (y/n): "; then
         print_info "Aborted by user. No changes were made to the firewall."
@@ -124,8 +110,8 @@ enable_ufw() {
 
     sudo ufw default deny incoming >/dev/null
     sudo ufw default allow outgoing >/dev/null
-    sudo ufw allow "$SSH_PORT/tcp" >/dev/null
-    print_info "Allowed SSH on port $SSH_PORT/tcp."
+    sudo ufw allow OpenSSH >/dev/null
+    print_info "Allowed SSH via the OpenSSH application profile."
 
     sudo ufw --force enable
     print_info "UFW is now active."
@@ -142,6 +128,7 @@ write_config() {
     sudo tee "$CONFIG_FILE" >/dev/null <<EOF
 CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')"
 UFW_ENABLED="yes"
+SSH_ALLOWED_VIA="OpenSSH"
 SSH_PORT="$SSH_PORT"
 DEFAULT_INCOMING="deny"
 DEFAULT_OUTGOING="allow"
@@ -153,7 +140,11 @@ EOF
 
 check_existing_config
 _install_dependencies ufw
-detect_ssh_port
+
+# اكتشاف بورت SSH الفعلي عبر الدالة العامة في utils.sh
+SSH_PORT=$(_detect_ssh_port)
+print_info "Detected SSH port: $SSH_PORT"
+
 check_old_rules
 check_affected_services
 enable_ufw
