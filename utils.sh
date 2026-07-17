@@ -74,7 +74,6 @@ _parse_common_flags() {
     done
 
     if [ "$reset_mode" = "yes" ]; then
-        # في وضع --reset تتم طباعة أوامر يشغلها eval في سياق السكربت نفسه
         printf 'ASSUME_YES=%q\n' "$ASSUME_YES"
         if [ ${#remaining[@]} -gt 0 ]; then
             printf 'set -- %s\n' "$(printf '%q ' "${remaining[@]}")"
