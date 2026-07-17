@@ -254,6 +254,87 @@ _create_systemd_service() {
     print_info "for show logs run   sudo journalctl -u $service_name -e"
 }
 
+_ensure_git_compatible() {
+    local min_version="${1:-2.25.0}"
+    local current_version
+
+    if ! command -v git >/dev/null 2>&1; then
+        print_warning "Git is not installed. Installing it..."
+        _install_dependencies git
+    fi
+
+    current_version=$(git --version | grep -oP '\d+\.\d+\.\d+')
+
+    if [ "$(printf '%s\n%s\n' "$min_version" "$current_version" | sort -V | head -n1)" != "$min_version" ]; then
+        print_warning "Git $current_version is too old (requires >= $min_version). Updating..."
+        _install_dependencies --only-upgrade git
+        current_version=$(git --version | grep -oP '\d+\.\d+\.\d+')
+    fi
+
+    if [ "$(printf '%s\n%s\n' "$min_version" "$current_version" | sort -V | head -n1)" != "$min_version" ]; then
+        print_error "Git $current_version still does not meet the minimum required version ($min_version). Please update Git manually."
+        return 1
+    fi
+
+    print_info "Git $current_version is compatible (minimum required: $min_version)."
+}
+
+_download_github_path() {
+    local repo_url="$1"
+    local repo_path="$2"
+    local destination="$3"
+    local branch="${4:-main}"
+    local min_git_version="${5:-2.25.0}"
+
+    if [ -z "$repo_url" ] || [ -z "$repo_path" ] || [ -z "$destination" ]; then
+        print_error "Usage: _download_github_path <repo_url> <path_in_repo> <destination> [branch] [min_git_version]"
+        return 1
+    fi
+
+    _ensure_git_compatible "$min_git_version" || return 1
+
+    print_step "Download '$repo_path' from $repo_url"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    print_info "Fetching repository metadata (sparse checkout)..."
+    if ! git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$branch" "$repo_url" "$tmp_dir"; then
+        print_error "Failed to clone repository '$repo_url' (branch: $branch)."
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    (
+        cd "$tmp_dir" || exit 1
+        git sparse-checkout set "$repo_path"
+    )
+
+    local source_path="$tmp_dir/$repo_path"
+
+    if [ ! -e "$source_path" ]; then
+        print_error "Path '$repo_path' was not found in the repository."
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    rm -rf "$destination"
+
+    if [ -d "$source_path" ]; then
+        mkdir -p "$destination"
+        cp -r "$source_path/." "$destination/"
+    else
+        mkdir -p "$(dirname "$destination")"
+        cp "$source_path" "$destination"
+    fi
+
+    rm -rf "$tmp_dir"
+
+    print_info "Downloaded '$repo_path' to '$destination'."
+}
+
+
+
 
 
 
