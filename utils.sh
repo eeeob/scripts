@@ -50,10 +50,10 @@ _prompt_required() {
     printf -v "$out_var_name" '%s' "$input"
 }
 
-# تتعرف على الأعلام المشتركة (-y / --yes) وتضع الباقي في REMAINING_ARGS
-# الاستخدام العادي (بدون إعادة تعيين args):
+# تتعرف على الأعلام المشتركة (-y / --yes) وتفعّل ASSUME_YES
+# الاستخدام العادي (بدون إعادة تعيين args، وتبقى كلها متاحة عبر "$@"):
 #   _parse_common_flags "$@"
-# أو مع إعادة تعيين args الخاصة بالسكربت تلقائياً:
+# أو مع إعادة تعيين args الخاصة بالسكربت (بدون الأعلام المشتركة):
 #   eval "$(_parse_common_flags --reset "$@")"
 _parse_common_flags() {
     local reset_mode="no"
@@ -63,24 +63,23 @@ _parse_common_flags() {
     fi
 
     ASSUME_YES="${ASSUME_YES:-no}"
-    REMAINING_ARGS=()
+    local -a remaining=()
     local arg
 
     for arg in "$@"; do
         case "$arg" in
             -y|--yes) ASSUME_YES="yes" ;;
-            *) REMAINING_ARGS+=("$arg") ;;
+            *) remaining+=("$arg") ;;
         esac
     done
 
     if [ "$reset_mode" = "yes" ]; then
         # في وضع --reset تتم طباعة أوامر يشغلها eval في سياق السكربت نفسه
         printf 'ASSUME_YES=%q\n' "$ASSUME_YES"
-        if [ ${#REMAINING_ARGS[@]} -gt 0 ]; then
-            printf 'REMAINING_ARGS=(%s)\n' "$(printf '%q ' "${REMAINING_ARGS[@]}")"
-            printf 'set -- %s\n' "$(printf '%q ' "${REMAINING_ARGS[@]}")"
+        if [ ${#remaining[@]} -gt 0 ]; then
+            printf 'set -- %s\n' "$(printf '%q ' "${remaining[@]}")"
         else
-            printf 'REMAINING_ARGS=()\nset --\n'
+            printf 'set --\n'
         fi
     fi
 }
