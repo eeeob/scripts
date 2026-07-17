@@ -18,14 +18,10 @@ CONFIG_FILE="$CONFIG_DIR/ufw_setup.conf"
 CONFIGS_BASE_URL="https://raw.githubusercontent.com/eeeob/configs/main/ufw"
 SSH_PORT="22"
 OLD_RULES_RESET="no"
-ASSUME_YES="no"
 
-while getopts "y" opt; do
-    case "${opt}" in
-        y) ASSUME_YES="yes" ;;
-        *) echo "Usage: $0 [-y]"; exit 1 ;;
-    esac
-done
+# التعرف على الأعلام المشتركة (-y للموافقة التلقائية) مع إبقاء باقي المتغيرات متاحة للسكربت
+_parse_common_flags "$@"
+set -- "${REMAINING_ARGS[@]}"
 
 # تنزيل الملفات المساعدة الخاصة بالسكربت من مشروع configs
 ASSETS_DIR=$(mktemp -d)

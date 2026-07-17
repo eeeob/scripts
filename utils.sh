@@ -50,6 +50,22 @@ _prompt_required() {
     printf -v "$out_var_name" '%s' "$input"
 }
 
+# تتعرف على الأعلام المشتركة (-y / --yes) وتضع الباقي في REMAINING_ARGS
+# الاستخدام داخل أي سكربت:
+#   _parse_common_flags "$@"
+#   set -- "${REMAINING_ARGS[@]}"
+_parse_common_flags() {
+    REMAINING_ARGS=()
+    local arg
+
+    for arg in "$@"; do
+        case "$arg" in
+            -y|--yes) ASSUME_YES="yes" ;;
+            *) REMAINING_ARGS+=("$arg") ;;
+        esac
+    done
+}
+
 _confirm() {
     local prompt_text="$1"
 
