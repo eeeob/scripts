@@ -51,10 +51,18 @@ _prompt_required() {
 }
 
 # تتعرف على الأعلام المشتركة (-y / --yes) وتضع الباقي في REMAINING_ARGS
-# الاستخدام داخل أي سكربت:
+# الاستخدام العادي (بدون إعادة تعيين args):
 #   _parse_common_flags "$@"
-#   set -- "${REMAINING_ARGS[@]}"
+# أو مع إعادة تعيين args الخاصة بالسكربت تلقائياً:
+#   eval "$(_parse_common_flags --reset "$@")"
 _parse_common_flags() {
+    local reset_mode="no"
+    if [ "${1:-}" = "--reset" ]; then
+        reset_mode="yes"
+        shift
+    fi
+
+    ASSUME_YES="${ASSUME_YES:-no}"
     REMAINING_ARGS=()
     local arg
 
@@ -64,6 +72,17 @@ _parse_common_flags() {
             *) REMAINING_ARGS+=("$arg") ;;
         esac
     done
+
+    if [ "$reset_mode" = "yes" ]; then
+        # في وضع --reset تتم طباعة أوامر يشغلها eval في سياق السكربت نفسه
+        printf 'ASSUME_YES=%q\n' "$ASSUME_YES"
+        if [ ${#REMAINING_ARGS[@]} -gt 0 ]; then
+            printf 'REMAINING_ARGS=(%s)\n' "$(printf '%q ' "${REMAINING_ARGS[@]}")"
+            printf 'set -- %s\n' "$(printf '%q ' "${REMAINING_ARGS[@]}")"
+        else
+            printf 'REMAINING_ARGS=()\nset --\n'
+        fi
+    fi
 }
 
 _confirm() {

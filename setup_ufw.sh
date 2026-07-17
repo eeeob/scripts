@@ -19,9 +19,8 @@ CONFIGS_BASE_URL="https://raw.githubusercontent.com/eeeob/configs/main/ufw"
 SSH_PORT="22"
 OLD_RULES_RESET="no"
 
-# التعرف على الأعلام المشتركة (-y للموافقة التلقائية) مع إبقاء باقي المتغيرات متاحة للسكربت
-_parse_common_flags "$@"
-set -- "${REMAINING_ARGS[@]}"
+# التعرف على الأعلام المشتركة (-y للموافقة التلقائية) مع إعادة تعيين باقي args للسكربت
+eval "$(_parse_common_flags --reset "$@")"
 
 # تنزيل الملفات المساعدة الخاصة بالسكربت من مشروع configs
 ASSETS_DIR=$(mktemp -d)
