@@ -139,7 +139,7 @@ check_affected_services
 enable_ufw
 write_config
 
-sudo rm -rf $ASSETS_DIR
+sudo rm -rf "$ASSETS_DIR"
 
 print_step "UFW setup completed successfully"
 
