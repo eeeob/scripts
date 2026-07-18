@@ -5,7 +5,7 @@
 # يقوم بتفعيل UFW مع إبقاء SSH مفتوحاً، مع فحص الخدمات المتأثرة والقواعد القديمة
 # آمن للتشغيل المنفرد عبر:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/eeeob/scripts/main/setup_ufw.sh)
-# تمرير -y يوافق تلقائياً على جميع التحققات
+# تمرير -y يوافق تلقائياً على جميع التحققات، و -n يرفضها تلقائياً
 # ==============================================================================
 
 set -e
@@ -19,7 +19,7 @@ CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
 SSH_PORT="22"
 OLD_RULES_RESET="no"
 
-# التعرف على الأعلام المشتركة (-y للموافقة التلقائية) مع إعادة تعيين باقي args للسكربت
+# التعرف على الأعلام المشتركة (-y موافقة / -n رفض تلقائي) مع إعادة تعيين باقي args للسكربت
 eval "$(_parse_common_flags --reset "$@")"
 
 # --- التحقق من وجود ملف config قديم من تشغيل سابق ---
@@ -139,4 +139,9 @@ check_affected_services
 enable_ufw
 write_config
 
+sudo rm -rf $ASSETS_DIR
+
 print_step "UFW setup completed successfully"
+
+
+

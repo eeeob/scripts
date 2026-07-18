@@ -50,7 +50,7 @@ _prompt_required() {
     printf -v "$out_var_name" '%s' "$input"
 }
 
-# تتعرف على الأعلام المشتركة (-y / --yes) وتفعّل ASSUME_YES
+# تتعرف على الأعلام المشتركة: -y / --yes موافقة تلقائية، -n / --no رفض تلقائي
 # الاستخدام العادي (بدون إعادة تعيين args، وتبقى كلها متاحة عبر "$@"):
 #   _parse_common_flags "$@"
 # أو مع إعادة تعيين args الخاصة بالسكربت (بدون الأعلام المشتركة):
@@ -63,18 +63,21 @@ _parse_common_flags() {
     fi
 
     ASSUME_YES="${ASSUME_YES:-no}"
+    ASSUME_NO="${ASSUME_NO:-no}"
     local -a remaining=()
     local arg
 
     for arg in "$@"; do
         case "$arg" in
             -y|--yes) ASSUME_YES="yes" ;;
+            -n|--no) ASSUME_NO="yes" ;;
             *) remaining+=("$arg") ;;
         esac
     done
 
     if [ "$reset_mode" = "yes" ]; then
         printf 'ASSUME_YES=%q\n' "$ASSUME_YES"
+        printf 'ASSUME_NO=%q\n' "$ASSUME_NO"
         if [ ${#remaining[@]} -gt 0 ]; then
             printf 'set -- %s\n' "$(printf '%q ' "${remaining[@]}")"
         else
@@ -85,6 +88,12 @@ _parse_common_flags() {
 
 _confirm() {
     local prompt_text="$1"
+
+    # عند تمرير -n يتم رفض كل التحققات تلقائياً (وله الأولوية على -y للأمان)
+    if [ "${ASSUME_NO:-no}" = "yes" ]; then
+        echo "${prompt_text}n (auto-declined by -n)"
+        return 1
+    fi
 
     # عند تمرير -y للسكربت يتم تفعيل ASSUME_YES فتتم الموافقة على كل التحققات تلقائياً
     if [ "${ASSUME_YES:-no}" = "yes" ]; then
