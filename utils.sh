@@ -618,12 +618,14 @@ _download_github_path() {
         return 1
     fi
 
-    rm -rf "$destination"
+    
 
     if [ -d "$source_path" ]; then
+        rm -rf "$destination"
         mkdir -p "$destination"
         cp -r "$source_path/." "$destination/"
     else
+        rm -f "$destination"
         mkdir -p "$(dirname "$destination")"
         cp "$source_path" "$destination"
     fi
