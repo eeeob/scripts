@@ -22,25 +22,6 @@ OLD_RULES_RESET="no"
 # التعرف على الأعلام المشتركة (-y موافقة / -n رفض تلقائي) مع إعادة تعيين باقي args للسكربت
 eval "$(_parse_common_flags --reset "$@")"
 
-# --- التحقق من وجود ملف config قديم من تشغيل سابق ---
-check_existing_config() {
-    sudo test -f "$CONFIG_FILE" || return 0
-
-    print_step "Existing configuration detected"
-    print_warning "A previous UFW setup config was found at: $CONFIG_FILE"
-    echo
-    sudo cat "$CONFIG_FILE"
-    echo
-
-    if _confirm "Delete the old config and redo the setup from scratch? (y/n): "; then
-        sudo rm -f "$CONFIG_FILE"
-        print_info "Old config deleted. Continuing with a fresh setup..."
-    else
-        print_info "Keeping the existing setup. Exiting without changes."
-        exit 0
-    fi
-}
-
 # --- التحقق من وجود قواعد UFW قديمة وتخيير المستخدم بإلغائها ---
 check_old_rules() {
     print_step "Checking existing UFW rules"
@@ -121,7 +102,7 @@ write_config() {
     print_info "Config saved to $CONFIG_FILE"
 }
 
-check_existing_config
+_handle_existing_config_file "$CONFIG_FILE"
 _install_dependencies ufw gettext-base
 
 # اكتشاف بورت SSH الفعلي عبر الدالة العامة في utils.sh

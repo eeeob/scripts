@@ -174,7 +174,7 @@ _install_dependencies() {
     fi
 
     print_step "Update system and install dependencies"
-    sudo apt-get update 
+    sudo apt-get update -y
     sudo apt-get install -y "$@"
 }
 
@@ -186,20 +186,23 @@ _install_docker() {
     else
         print_info "Installing Docker from official repository..."
 
+        _install_dependencies curl ca-certificates
+
         sudo install -m 0755 -d /etc/apt/keyrings
 
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-            | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
+        sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-        sudo chmod a+r /etc/apt/keyrings/docker.gpg
+        sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
 
-        echo \
-            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-            | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-
-        _install_dependencies docker-ce \
-            docker-ce-cli containerd.io \
-            docker-buildx-plugin docker-compose-plugin
+        _install_dependencies docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     fi
 
     print_info "Checking Docker service status..."
@@ -225,7 +228,19 @@ _install_docker() {
         print_info "User already in docker group."
     fi
 
-    print_info "Docker setup completed."
+    print_info "Waiting for Docker daemon to become ready..."
+    local attempt
+    for attempt in $(seq 1 30); do
+        if sudo docker info >/dev/null 2>&1; then
+            print_info "Docker daemon is up and ready."
+            print_info "Docker setup completed."
+            return 0
+        fi
+        sleep 1
+    done
+
+    print_error "Docker daemon did not become ready within 30 seconds."
+    return 1
 }
 
 _clone_or_update_project() {
@@ -266,6 +281,8 @@ _render_template_file() {
         fi
         vars_list+="\${$var_name} "
     done
+
+    sudo mkdir -p "$(dirname "$output_file")"
 
     env "${env_assignments[@]}" envsubst "$vars_list" \
         < "$template_file" \
@@ -337,6 +354,229 @@ _detect_ssh_port() {
     fi
 
     echo "${detected_port:-22}"
+}
+
+# تضيف/تحدث معلومات استخدام سريعة لخدمة تظهر في شاشة الدخول عبر SSH (MOTD)
+# الـ template سكربت جاهز للتشغيل (مثل motd-info.sh.tmpl) ويتم فقط تمرير المتغيرات التي يحتاجها
+# الاستخدام: _add_motd_info <service_name> <template_file> [VAR=value ...]
+_add_motd_info() {
+    local service_name="$1"
+    local template_file="$2"
+    shift 2
+
+    local motd_file="/etc/update-motd.d/99-${service_name}-info"
+
+    _render_template_file "$template_file" "$motd_file" "$@"
+    sudo chmod +x "$motd_file"
+}
+
+# تتحقق أن النظام Ubuntu وأن الإصدار مدعوم، وتطبع الـ codename (مثل jammy)
+# الاستخدام: UBUNTU_CODENAME=$(_get_ubuntu_codename "20.04 22.04 24.04")
+_get_ubuntu_codename() {
+    local supported_versions="$1"
+
+    if [ ! -f /etc/os-release ]; then
+        print_error "Cannot detect OS: /etc/os-release not found." >&2
+        return 1
+    fi
+
+    local os_id version_id codename
+    os_id=$(. /etc/os-release && echo "$ID")
+    version_id=$(. /etc/os-release && echo "$VERSION_ID")
+    codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+
+    if [ "$os_id" != "ubuntu" ]; then
+        print_error "Unsupported OS '$os_id'. This script supports Ubuntu only." >&2
+        return 1
+    fi
+
+    if [[ " $supported_versions " != *" $version_id "* ]]; then
+        print_error "Unsupported Ubuntu version '$version_id'. Supported versions: $supported_versions" >&2
+        return 1
+    fi
+
+    echo "$codename"
+}
+
+# تقرأ قيمة مفتاح من ملف config بصيغة KEY="value"
+_read_config_value() {
+    local config_file="$1"
+    local key="$2"
+
+    sudo grep -E "^${key}=" "$config_file" 2>/dev/null | head -n 1 | cut -d'"' -f2
+}
+
+# تتحقق من وجود ملف config قديم لخدمة وتخيّر المستخدم: إعادة الضبط من الصفر أو الخروج
+# عند اختيار إعادة الضبط تنفذ أمر التصفية المسجل داخل الكونفج نفسه (CLEANUP_COMMAND)
+# وهو المسؤول عن إيقاف وحذف كل ما يخص الخدمة، ثم تحذف الكونفج ومجلد الخدمة
+_handle_existing_config_file() {
+    local config_file="$1"
+
+    sudo test -f "$config_file" || return 0
+
+    print_step "Existing configuration detected"
+    print_warning "A previous setup config was found at: $config_file"
+    echo
+    sudo cat "$config_file"
+    echo
+
+    if ! _confirm "Remove everything related to this service (including its data) and redo the setup from scratch? (y/n): "; then
+        print_info "Keeping the existing setup. Exiting without changes."
+        exit 0
+    fi
+
+    local service cleanup_command
+    service=$(_read_config_value "$config_file" SERVICE)
+    cleanup_command=$(_read_config_value "$config_file" CLEANUP_COMMAND)
+
+    if [ -n "$cleanup_command" ]; then
+        print_step "Cleaning up previous '${service:-unknown}' installation"
+        sudo bash -c "$cleanup_command" || print_warning "Cleanup command finished with errors. Continuing anyway."
+    else
+        print_warning "No CLEANUP_COMMAND found in the config. Only the config file will be removed."
+    fi
+
+    # حذف معلومات MOTD الخاصة بالخدمة إن وجدت
+    [ -n "$service" ] && sudo rm -f "/etc/update-motd.d/99-${service}-info"
+
+    # حذف ملف الكونفج، ومجلد الخدمة كاملاً إذا كان لها مجلد خاص داخل /root/.configs
+    local parent_dir
+    parent_dir=$(dirname "$config_file")
+    sudo rm -f "$config_file"
+    if [ "$parent_dir" != "/root/.configs" ]; then
+        sudo rm -rf "$parent_dir"
+    fi
+
+    print_info "Previous installation cleaned up. Continuing with a fresh setup..."
+}
+
+# ترفع حظر الجدار الناري (ufw) عن بورت، مع إمكانية تقييد السماح بمصدر محدد
+# لا تفعل شيئاً إذا كان ufw غير مثبت أو غير مفعل
+# الاستخدام: _allow_port_through_firewall <port> [source_subnet]
+_allow_port_through_firewall() {
+    local port="$1"
+    local source_subnet="${2:-}"
+
+    command -v ufw >/dev/null 2>&1 || return 0
+
+    if ! sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        return 0
+    fi
+
+    if [ -n "$source_subnet" ]; then
+        print_info "UFW is active. Allowing port $port from $source_subnet..."
+        sudo ufw allow from "$source_subnet" to any port "$port" proto tcp >/dev/null
+    else
+        print_info "UFW is active. Allowing port $port..."
+        sudo ufw allow "$port/tcp" >/dev/null
+    fi
+}
+
+# تطبع subnet شبكة Docker المحددة
+# الاسم التلقائي: من المتغير العام DOCKER_NETWORK_NAME أو bridge (شبكة docker0)
+_get_docker_network_subnet() {
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-bridge}}"
+
+    sudo docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$network_name" 2>/dev/null
+}
+
+_docker_network_exists() {
+    sudo docker network inspect "$1" >/dev/null 2>&1
+}
+
+# تنشئ شبكة Docker إذا لم تكن موجودة مسبقاً، مع إمكانية تحديد نطاق IP
+# الاستخدام: _create_docker_network [network_name] [ip_range]
+# القيم التلقائية: من المتغيرات العالمية DOCKER_NETWORK_NAME و DOCKER_NETWORK_SUBNET
+# وإذا لم تكن معرفة يتم استخدام main_network و 172.20.0.0/16
+_create_docker_network() {
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-main_network}}"
+    local ip_range="${2:-${DOCKER_NETWORK_SUBNET:-172.20.0.0/16}}"
+
+    if _docker_network_exists "$network_name"; then
+        print_info "Docker network '$network_name' already exists. Skipping creation."
+        return 0
+    fi
+
+    print_info "Creating Docker network '$network_name'..."
+
+    if [ -n "$ip_range" ]; then
+        sudo docker network create --subnet "$ip_range" "$network_name" >/dev/null
+    else
+        sudo docker network create "$network_name" >/dev/null
+    fi
+
+    print_info "Docker network '$network_name' created successfully."
+}
+
+_container_exists() {
+    sudo docker ps -a --format '{{.Names}}' | grep -qx "$1"
+}
+
+
+
+# تحذف container مع صورته، وتحذف الشبكات المرتبطة به إذا كانت أنشئت له:
+# شبكة أنشأها compose (تحمل label الخاص به) أو شبكة لم يعد مرتبطاً بها أي container آخر
+_remove_container() {
+    local container_name="$1"
+
+    _container_exists "$container_name" || return 0
+
+    local image networks
+    image=$(sudo docker inspect --format '{{.Config.Image}}' "$container_name" 2>/dev/null || true)
+    networks=$(sudo docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container_name" 2>/dev/null || true)
+
+    print_info "Removing container '$container_name'..."
+    sudo docker rm -f "$container_name" >/dev/null 2>&1 || true
+
+    if [ -n "$image" ]; then
+        if sudo docker rmi "$image" >/dev/null 2>&1; then
+            print_info "Image '$image' removed."
+        else
+            print_warning "Image '$image' is still in use by another container. Skipped removing it."
+        fi
+    fi
+
+    local network compose_label attached_count
+    for network in $networks; do
+        # الشبكات الافتراضية في Docker لا تُحذف أبداً
+        case "$network" in
+            bridge|host|none) continue ;;
+        esac
+
+        _docker_network_exists "$network" || continue
+
+        compose_label=$(sudo docker network inspect --format '{{index .Labels "com.docker.compose.network"}}' "$network" 2>/dev/null || true)
+        attached_count=$(sudo docker network inspect --format '{{len .Containers}}' "$network" 2>/dev/null || echo 1)
+
+        if [ -n "$compose_label" ] || [ "$attached_count" = "0" ]; then
+            if sudo docker network rm "$network" >/dev/null 2>&1; then
+                print_info "Network '$network' removed."
+            else
+                print_warning "Network '$network' is still in use. Skipped removing it."
+            fi
+        fi
+    done
+}
+
+# إذا وجد container بنفس الاسم: تخيير المستخدم بحذفه وإعادة إنشائه (ترجع 0)
+# أو الإبقاء عليه (ترجع 1 ليعرف المستدعي أنه لا حاجة لإنشاء جديد)
+# الحذف يتم عبر _remove_container (الصورة والشبكات الخاصة به تُحذف معه)
+_handle_existing_container() {
+    local container_name="$1"
+
+    _container_exists "$container_name" || return 0
+
+    print_warning "A Docker container named '$container_name' already exists:"
+    sudo docker ps -a --filter "name=^${container_name}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+    echo
+
+    if _confirm "Remove this container (with its image and its own networks) and create a fresh one? (y/n): "; then
+        _remove_container "$container_name"
+        return 0
+    fi
+
+    print_info "Keeping the existing container."
+    return 1
 }
 
 _download_github_path() {
