@@ -223,7 +223,6 @@ _handle_existing_config_file "$CONFIG_FILE"
 detect_previous_installation
 choose_install_method
 
-_install_dependencies gettext-base
 _download_github_path "$CONFIGS_REPO_URL" "mongodb" "$TEMP_CONFIG_DIR"
 
 print_info "Detected supported Ubuntu release: $UBUNTU_CODENAME"

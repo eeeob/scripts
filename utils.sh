@@ -284,6 +284,8 @@ _render_template_file() {
 
     sudo mkdir -p "$(dirname "$output_file")"
 
+    command -v envsubst >/dev/null 2>&1 || _install_dependencies gettext-base
+
     env "${env_assignments[@]}" envsubst "$vars_list" \
         < "$template_file" \
         | sudo tee "$output_file" > /dev/null

@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==============================================================================
-# UFW Firewall Setup Script
+# UFW Firewall Setup Script (Ubuntu 20.04 / 22.04 / 24.04)
 # يقوم بتفعيل UFW مع إبقاء SSH مفتوحاً، مع فحص الخدمات المتأثرة والقواعد القديمة
-# آمن للتشغيل المنفرد عبر:
+# قابل لإعادة التشغيل أكثر من مرة بدون مشاكل، وآمن للتشغيل المنفرد عبر:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/eeeob/scripts/main/setup_ufw.sh)
 # تمرير -y يوافق تلقائياً على جميع التحققات، و -n يرفضها تلقائياً
 # ==============================================================================
@@ -13,9 +13,11 @@ set -e
 # جلب الدوال المشتركة من utils.sh
 sudo apt-get update -y && sudo apt-get install -y curl && source <(curl -fsSL https://raw.githubusercontent.com/eeeob/scripts/main/utils.sh)
 
-CONFIG_DIR="/root/.configs"
-CONFIG_FILE="$CONFIG_DIR/ufw_setup.conf"
+TEMP_CONFIG_DIR="/root/.temp_configs/ufw"
+CONFIG_FILE="/root/.configs/ufw_setup.conf"
+
 CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
+
 SSH_PORT="22"
 OLD_RULES_RESET="no"
 
@@ -54,7 +56,7 @@ check_affected_services() {
     print_step "Checking services that may be affected"
 
     local affected
-    affected=$(sudo ss -tulnpH 2>/dev/null | awk -v ssh="$SSH_PORT" -f "$ASSETS_DIR/ufw/affected_services.awk")
+    affected=$(sudo ss -tulnpH 2>/dev/null | awk -v ssh="$SSH_PORT" -f "$TEMP_CONFIG_DIR/affected_services.awk")
 
     if [ -z "$affected" ]; then
         print_info "No public listening services found other than SSH. Safe to enable."
@@ -92,37 +94,40 @@ enable_ufw() {
 write_config() {
     print_step "Writing config file"
 
-    sudo mkdir -p "$CONFIG_DIR"
-
-    _render_template_file "$ASSETS_DIR/ufw/ufw_setup.conf.template" "$CONFIG_FILE" \
+    _render_template_file "$TEMP_CONFIG_DIR/ufw_setup.conf.template" "$CONFIG_FILE" \
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
         SSH_PORT="$SSH_PORT" \
-        OLD_RULES_RESET="$OLD_RULES_RESET"
+        OLD_RULES_RESET="$OLD_RULES_RESET" \
+        CLEANUP_COMMAND="ufw --force reset"
 
     print_info "Config saved to $CONFIG_FILE"
 }
 
+# --- إضافة معلومات استخدام سريعة لشاشة الدخول عبر SSH (من template في configs) ---
+add_ssh_quick_info() {
+    print_step "Adding quick usage info to the SSH login screen"
+
+    _add_motd_info "ufw" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
+        CONFIG_FILE="$CONFIG_FILE"
+
+    print_info "Quick usage info will appear on the next SSH login."
+}
+
+trap 'rm -rf "$TEMP_CONFIG_DIR"' EXIT
+
 _handle_existing_config_file "$CONFIG_FILE"
-_install_dependencies ufw gettext-base
+
+_install_dependencies ufw
+_download_github_path "$CONFIGS_REPO_URL" "ufw" "$TEMP_CONFIG_DIR"
 
 # اكتشاف بورت SSH الفعلي عبر الدالة العامة في utils.sh
 SSH_PORT=$(_detect_ssh_port)
 print_info "Detected SSH port: $SSH_PORT"
 
-# جلب الملفات المساعدة من مشروع configs إلى مجلد مؤقت يُحذف عند الخروج
-# لا يبقى على السيرفر إلا ملف الاعدادات النهائي الحقيقي في /root/.configs
-ASSETS_DIR=$(mktemp -d)
-trap 'rm -rf "$ASSETS_DIR"' EXIT
-_download_github_path "$CONFIGS_REPO_URL" "ufw" "$ASSETS_DIR/ufw"
-
 check_old_rules
 check_affected_services
 enable_ufw
 write_config
-
-sudo rm -rf "$ASSETS_DIR"
+add_ssh_quick_info
 
 print_step "UFW setup completed successfully"
-
-
-

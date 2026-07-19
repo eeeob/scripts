@@ -307,7 +307,7 @@ choose_install_method
 check_ports
 ensure_domain
 
-_install_dependencies gnupg ca-certificates gettext-base openssl
+_install_dependencies gnupg ca-certificates openssl
 
 # جلب الملفات المساعدة من مشروع configs إلى مجلد مؤقت يُحذف عند الخروج
 ASSETS_DIR=$(mktemp -d)
