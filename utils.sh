@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 
+# ==============================================================================
+# utils.sh - دوال مشتركة لسكربتات مشروع scripts
+# مقسّمة إلى أقسام حسب الخدمة/الوظيفة
+# ==============================================================================
+
+
+# ==============================================================================
+# Output helpers - دوال الطباعة
+# ==============================================================================
 
 print_step() {
     echo
@@ -20,35 +29,10 @@ print_error() {
     echo -e "\e[31m[ERROR] $1\e[0m"
 }
 
-_prompt_required() {
-    local prompt_text="$1"
-    local out_var_name="$2"
-    local regex_pattern="${3:-}"
-    local secret_flag="${4:-}"
 
-    local input=""
-    local -a read_opts=()
-    [ "$secret_flag" = "--secret" ] && read_opts+=(-s)
-
-    while true; do
-        read "${read_opts[@]}" -p "$prompt_text" input </dev/tty
-        [ "$secret_flag" = "--secret" ] && echo ""
-
-        if [ -z "$input" ]; then
-            print_error "This value cannot be empty!"
-            continue
-        fi
-
-        if [ -n "$regex_pattern" ] && [[ ! "$input" =~ $regex_pattern ]]; then
-            print_error "Invalid value!"
-            continue
-        fi
-
-        break
-    done
-
-    printf -v "$out_var_name" '%s' "$input"
-}
+# ==============================================================================
+# Input, prompts & confirmation - المدخلات والتحققات والتخيير
+# ==============================================================================
 
 # تتعرف على الأعلام المشتركة: -y / --yes موافقة تلقائية، -n / --no رفض تلقائي
 # الاستخدام العادي (بدون إعادة تعيين args، وتبقى كلها متاحة عبر "$@"):
@@ -64,6 +48,7 @@ _parse_common_flags() {
 
     ASSUME_YES="${ASSUME_YES:-no}"
     ASSUME_NO="${ASSUME_NO:-no}"
+    
     local -a remaining=()
     local arg
 
@@ -108,6 +93,52 @@ _confirm() {
     [[ "$response" =~ ^(y|yes)$ ]]
 }
 
+_prompt_required() {
+    local prompt_text="$1"
+    local out_var_name="$2"
+    local regex_pattern="${3:-}"
+    local secret_flag="${4:-}"
+
+    local input=""
+    local -a read_opts=()
+    [ "$secret_flag" = "--secret" ] && read_opts+=(-s)
+
+    while true; do
+        read "${read_opts[@]}" -p "$prompt_text" input </dev/tty
+        [ "$secret_flag" = "--secret" ] && echo ""
+
+        if [ -z "$input" ]; then
+            print_error "This value cannot be empty!"
+            continue
+        fi
+
+        if [ -n "$regex_pattern" ] && [[ ! "$input" =~ $regex_pattern ]]; then
+            print_error "Invalid value!"
+            continue
+        fi
+
+        break
+    done
+
+    printf -v "$out_var_name" '%s' "$input"
+}
+
+_prompt_paste_file() {
+    local prompt_text="$1"
+    local target_file="$2"
+
+    echo
+    echo "================================================================="
+    echo " $prompt_text"
+    echo "================================================================="
+    echo "File to edit:"
+    echo " $target_file"
+    echo
+
+    read -p "Press ENTER to open the file..." </dev/tty
+    nano "$target_file" </dev/tty
+}
+
 _check_variable_required() {
     local var_name="$1"
     local var_value="$2"
@@ -134,7 +165,7 @@ _ask_to_save_permanently() {
     fi
 
     local shell_profile=""
-    
+
     if [ -f "/root/.bashrc" ]; then
         shell_profile="/root/.bashrc"
     elif [ -f "/root/.profile" ]; then
@@ -151,25 +182,96 @@ _ask_to_save_permanently() {
     print_info "Saved $var_name permanently to $shell_profile"
 }
 
-_prompt_paste_file() {
-    local prompt_text="$1"
-    local target_file="$2"
 
-    echo
-    echo "================================================================="
-    echo " $prompt_text"
-    echo "================================================================="
-    echo "File to edit:"
-    echo " $target_file"
-    echo
-
-    read -p "Press ENTER to open the file..." </dev/tty
-    nano "$target_file" </dev/tty
-}
+# ==============================================================================
+# Packages & dependencies - الحزم والتبعيات
+# ==============================================================================
 
 _package_installed() {
     dpkg -s "$1" >/dev/null 2>&1 || command -v "$1" >/dev/null 2>&1
 }
+
+_install_dependencies() {
+    if [ "$#" -eq 0 ]; then
+        print_error "No dependencies specified to install."
+        return 1
+    fi
+
+    sudo apt-get update -y
+    sudo apt-get install -y "$@"
+}
+
+# تثبت الحزم الممررة فقط إن لم تكن مثبتة مسبقاً (بدون apt update إذا كانت كلها موجودة)
+# التحقق يتم بطريقتين: dpkg -s للحزمة، أو command -v إذا كان الاسم أمراً متاحاً
+# (يغطي حالة أداة مثبتة من خارج apt مثل git من المصدر)
+# الاستخدام: _ensure_packages <pkg1> [pkg2] ...
+_ensure_packages() {
+    if [ "$#" -eq 0 ]; then
+        print_error "No packages specified to ensure."
+        return 1
+    fi
+
+    local -a missing_packages=()
+    local pkg
+
+    for pkg in "$@"; do
+        _package_installed "$pkg" || missing_packages+=("$pkg")
+    done
+
+    [ ${#missing_packages[@]} -eq 0 ] && return 0
+
+    _install_dependencies "${missing_packages[@]}"
+}
+
+
+# ==============================================================================
+# OS & system detection - كشف النظام والبيئة
+# ==============================================================================
+
+# تتحقق أن النظام Ubuntu وأن الإصدار مدعوم، وتطبع الـ codename (مثل jammy)
+# الاستخدام: UBUNTU_CODENAME=$(_get_ubuntu_codename "20.04 22.04 24.04")
+_get_ubuntu_codename() {
+    local supported_versions="$1"
+
+    if [ ! -f /etc/os-release ]; then
+        print_error "Cannot detect OS: /etc/os-release not found." >&2
+        return 1
+    fi
+
+    local os_id version_id codename
+    os_id=$(. /etc/os-release && echo "$ID")
+    version_id=$(. /etc/os-release && echo "$VERSION_ID")
+    codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+
+    if [ "$os_id" != "ubuntu" ]; then
+        print_error "Unsupported OS '$os_id'. This script supports Ubuntu only." >&2
+        return 1
+    fi
+
+    if [[ " $supported_versions " != *" $version_id "* ]]; then
+        print_error "Unsupported Ubuntu version '$version_id'. Supported versions: $supported_versions" >&2
+        return 1
+    fi
+
+    echo "$codename"
+}
+
+_detect_ssh_port() {
+    local detected_port=""
+
+    detected_port=$(sudo ss -tlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]; exit}')
+
+    if [ -z "$detected_port" ] && [ -f /etc/ssh/sshd_config ]; then
+        detected_port=$(grep -iE '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n1)
+    fi
+
+    echo "${detected_port:-22}"
+}
+
+
+# ==============================================================================
+# Systemd services - خدمات systemd
+# ==============================================================================
 
 _service_exists() {
     local service="$1"
@@ -224,43 +326,320 @@ _wait_for_service() {
     done
 }
 
-_install_dependencies() {
-    if [ "$#" -eq 0 ]; then
-        print_error "No dependencies specified to install."
-        return 1
+_create_systemd_service() {
+    local service_name="$1"
+    local template_file="$2"
+    shift 2
+    local -a template_vars=("$@")
+
+    print_step "Creating Systemd Service: ${service_name}"
+
+    local service_file="/etc/systemd/system/${service_name}.service"
+
+    if _service_exists "$service_name" || [ -f "$service_file" ]; then
+        print_info "Existing service '${service_name}' detected. Destroy it first..."
+        _destroy_service "$service_name" "$service_file"
+        print_info "Old service successfully cleaned up."
     fi
 
-    sudo apt-get update -y
-    sudo apt-get install -y "$@"
+    print_info "Configuring systemd service file at ${service_file}..."
+
+    _render_template_file "$template_file" "$service_file" "${template_vars[@]}"
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable "${service_name}.service" >/dev/null 2>&1
+
+
+    print_info "✅ Systemd service ${service_name}.service successfully created and enabled."
+    print_info "for show logs run   sudo journalctl -u $service_name -e"
 }
 
-# تثبت الحزم الممررة فقط إن لم تكن مثبتة مسبقاً (بدون apt update إذا كانت كلها موجودة)
-# التحقق يتم بطريقتين: dpkg -s للحزمة، أو command -v إذا كان الاسم أمراً متاحاً
-# (يغطي حالة أداة مثبتة من خارج apt مثل git من المصدر)
-# الاستخدام: _ensure_packages <pkg1> [pkg2] ...
-_ensure_packages() {
-    if [ "$#" -eq 0 ]; then
-        print_error "No packages specified to ensure."
-        return 1
-    fi
 
-    local -a missing_packages=()
-    local pkg
+# ==============================================================================
+# Templates, configs & MOTD - القوالب وملفات الاعدادات وشاشة الدخول
+# ==============================================================================
 
-    for pkg in "$@"; do
-        _package_installed "$pkg" || missing_packages+=("$pkg")
+_render_template_file() {
+    local template_file="$1"
+    local output_file="$2"
+    shift 2
+    local -a template_vars=("$@")
+
+    local vars_list=""
+    local -a env_assignments=()
+    local arg var_name
+
+    for arg in "${template_vars[@]}"; do
+        if [[ "$arg" == *=* ]]; then
+            var_name="${arg%%=*}"
+            env_assignments+=("$arg")
+        else
+            var_name="$arg"
+        fi
+        vars_list+="\${$var_name} "
     done
 
-    [ ${#missing_packages[@]} -eq 0 ] && return 0
+    sudo mkdir -p "$(dirname "$output_file")"
 
-    _install_dependencies "${missing_packages[@]}"
+    # envsubst يأتي من حزمة gettext-base
+    _ensure_packages gettext-base
+
+    env "${env_assignments[@]}" envsubst "$vars_list" \
+        < "$template_file" \
+        | sudo tee "$output_file" > /dev/null
 }
 
+# تقرأ قيمة مفتاح من ملف config بصيغة KEY="value"
+_read_config_value() {
+    local config_file="$1"
+    local key="$2"
+
+    sudo grep -E "^${key}=" "$config_file" 2>/dev/null | head -n 1 | cut -d'"' -f2
+}
+
+# تتحقق من وجود ملف config قديم لخدمة وتخيّر المستخدم: إعادة الضبط من الصفر أو الخروج
+# عند اختيار إعادة الضبط تنفذ أمر التصفية المسجل داخل الكونفج نفسه (CLEANUP_COMMAND)
+# وهو المسؤول عن إيقاف وحذف كل ما يخص الخدمة، ثم تحذف الكونفج ومجلد الخدمة
+_handle_existing_config_file() {
+    local config_file="$1"
+
+    sudo test -f "$config_file" || return 0
+
+    print_step "Existing configuration detected"
+    print_warning "A previous setup config was found at: $config_file"
+    echo
+    sudo cat "$config_file"
+    echo
+
+    if ! _confirm "Remove everything related to this service (including its data) and redo the setup from scratch? (y/n): "; then
+        print_info "Keeping the existing setup. Exiting without changes."
+        exit 0
+    fi
+
+    local service cleanup_command
+    service=$(_read_config_value "$config_file" SERVICE)
+    cleanup_command=$(_read_config_value "$config_file" CLEANUP_COMMAND)
+
+    if [ -n "$cleanup_command" ]; then
+        print_step "Cleaning up previous '${service:-unknown}' installation"
+        sudo bash -c "$cleanup_command" || print_warning "Cleanup command finished with errors. Continuing anyway."
+    else
+        print_warning "No CLEANUP_COMMAND found in the config. Only the config file will be removed."
+    fi
+
+    # حذف معلومات MOTD الخاصة بالخدمة إن وجدت
+    [ -n "$service" ] && sudo rm -f "/etc/update-motd.d/99-${service}-info"
+
+    # حذف ملف الكونفج، ومجلد الخدمة كاملاً إذا كان لها مجلد خاص داخل /root/.configs
+    local parent_dir
+    parent_dir=$(dirname "$config_file")
+    sudo rm -f "$config_file"
+    if [ "$parent_dir" != "/root/.configs" ]; then
+        sudo rm -rf "$parent_dir"
+    fi
+
+    print_info "Previous installation cleaned up. Continuing with a fresh setup..."
+}
+
+# تضيف/تحدث معلومات استخدام سريعة لخدمة تظهر في شاشة الدخول عبر SSH (MOTD)
+# الـ template سكربت جاهز للتشغيل (مثل motd-info.sh.tmpl) ويتم فقط تمرير المتغيرات التي يحتاجها
+# الاستخدام: _add_motd_info <service_name> <template_file> [VAR=value ...]
+_add_motd_info() {
+    local service_name="$1"
+    local template_file="$2"
+    shift 2
+
+    local motd_file="/etc/update-motd.d/99-${service_name}-info"
+
+    _render_template_file "$template_file" "$motd_file" "$@"
+    sudo chmod +x "$motd_file"
+}
+
+
+# ==============================================================================
+# Firewall (UFW) - الجدار الناري
+# ==============================================================================
+
+# ترفع حظر الجدار الناري (ufw) عن بورت، مع إمكانية تقييد السماح بمصدر محدد
+# لا تفعل شيئاً إذا كان ufw غير مثبت أو غير مفعل
+# الاستخدام: _allow_port_through_firewall <port> [source_subnet]
+_allow_port_through_firewall() {
+    local port="$1"
+    local source_subnet="${2:-}"
+
+    _package_installed ufw || return 0
+
+    if ! sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        return 0
+    fi
+
+    if [ -n "$source_subnet" ]; then
+        print_info "UFW is active. Allowing port $port from $source_subnet..."
+        sudo ufw allow from "$source_subnet" to any port "$port" proto tcp >/dev/null
+    else
+        print_info "UFW is active. Allowing port $port..."
+        sudo ufw allow "$port/tcp" >/dev/null
+    fi
+}
+
+
+# ==============================================================================
+# Git & GitHub - جيت والمستودعات
+# ==============================================================================
+
+_ensure_git_compatible() {
+    local min_version="${1:-2.25.0}"
+    local current_version
+
+    _ensure_packages git
+
+    current_version=$(git --version | grep -oP '\d+\.\d+\.\d+')
+
+    if [ "$(printf '%s\n%s\n' "$min_version" "$current_version" | sort -V | head -n1)" != "$min_version" ]; then
+        print_warning "Git $current_version is too old (requires >= $min_version). Updating..."
+        _install_dependencies --only-upgrade git
+        current_version=$(git --version | grep -oP '\d+\.\d+\.\d+')
+    fi
+
+    if [ "$(printf '%s\n%s\n' "$min_version" "$current_version" | sort -V | head -n1)" != "$min_version" ]; then
+        print_error "Git $current_version still does not meet the minimum required version ($min_version). Please update Git manually."
+        return 1
+    fi
+
+    print_info "Git $current_version is compatible (minimum required: $min_version)."
+}
+
+_clone_or_update_project() {
+    local repo_url="$1"
+    local project_dir="$2"
+    local branch="${3:-main}"
+
+    print_step "Clone or update project"
+    _ensure_packages git
+
+    if [ -d "$project_dir/.git" ]; then
+        print_info "Project already exists. Pulling latest changes..."
+        cd "$project_dir"
+        git fetch --all
+        git reset --hard "origin/$branch"
+        return
+    fi
+
+    print_info "Cloning project..."
+    git clone "$repo_url" "$project_dir"
+}
+
+_download_github_path() {
+    local repo_url="$1"
+    local repo_path="$2"
+    local destination="$3"
+    local branch="${4:-main}"
+    local min_git_version="${5:-2.25.0}"
+
+    if [ -z "$repo_url" ] || [ -z "$repo_path" ] || [ -z "$destination" ]; then
+        print_error "Usage: _download_github_path <repo_url> <path_in_repo> <destination> [branch] [min_git_version]"
+        return 1
+    fi
+
+    _ensure_git_compatible "$min_git_version" || return 1
+
+    print_step "Download '$repo_path' from $repo_url"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    print_info "Fetching repository metadata (sparse checkout)..."
+    if ! git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$branch" "$repo_url" "$tmp_dir"; then
+        print_error "Failed to clone repository '$repo_url' (branch: $branch)."
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    (
+        cd "$tmp_dir" || exit 1
+        git sparse-checkout set "$repo_path"
+    )
+
+    local source_path="$tmp_dir/$repo_path"
+
+    if [ ! -e "$source_path" ]; then
+        print_error "Path '$repo_path' was not found in the repository."
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    if [ -d "$source_path" ]; then
+        rm -rf "$destination"
+        mkdir -p "$destination"
+        cp -r "$source_path/." "$destination/"
+    else
+        rm -f "$destination"
+        mkdir -p "$(dirname "$destination")"
+        cp "$source_path" "$destination"
+    fi
+
+    rm -rf "$tmp_dir"
+
+    print_info "Downloaded '$repo_path' to '$destination'."
+}
+
+# تنزّل سكربتاً من مستودع GitHub (خاص أو عام) وتشغّله عبر bash
+# تستخرج التوكن من ~/.git-credentials بعد تفعيل credential.helper store
+# الاستخدام: _run_github_script [github_user] [repo] [script_path] [branch]
+# القيم التلقائية من المتغيرات العامة: GITHUB_USER / GITHUB_REPO / GITHUB_SCRIPT_PATH / GITHUB_BRANCH
+_run_github_script() {
+    local github_user="${1:-${GITHUB_USER:-eeeob}}"
+    local repo="${2:-${GITHUB_REPO:-}}"
+    local script_path="${3:-${GITHUB_SCRIPT_PATH:-}}"
+    local branch="${4:-${GITHUB_BRANCH:-main}}"
+
+    if [ -z "$repo" ] || [ -z "$script_path" ]; then
+        print_error "_run_github_script: repo and script_path are required (args or GITHUB_* globals)."
+        return 1
+    fi
+
+    _ensure_packages git curl
+
+    print_info "Enabling Git credential storage..."
+    git config --global credential.helper store
+
+    print_info "Testing GitHub access to ${github_user}/${repo}..."
+    if ! git ls-remote "https://github.com/${github_user}/${repo}.git" >/dev/null; then
+        print_error "GitHub authentication failed for ${github_user}/${repo}."
+        return 1
+    fi
+
+    if [ ! -f "$HOME/.git-credentials" ]; then
+        print_error "Git credentials not found at ~/.git-credentials."
+        return 1
+    fi
+
+    local token
+    token=$(grep "github.com" "$HOME/.git-credentials" | tail -n1 | sed -E 's#https://[^:]+:([^@]+)@.*#\1#')
+
+    if [ -z "$token" ]; then
+        print_error "Could not extract GitHub token from ~/.git-credentials."
+        return 1
+    fi
+
+    print_info "Downloading and running '${script_path}' from ${github_user}/${repo} (${branch})..."
+    curl -fsSL \
+        -H "Authorization: token ${token}" \
+        -H "Accept: application/vnd.github.raw" \
+        "https://api.github.com/repos/${github_user}/${repo}/contents/${script_path}?ref=${branch}" \
+        | bash
+}
+
+
+# ==============================================================================
+# Docker - دوكر (تثبيت، شبكات، حاويات)
+# ==============================================================================
+
 _install_docker() {
-    
+
     if ! _package_installed docker; then
         print_step "Install Docker"
-        
+
         _ensure_packages curl ca-certificates
 
         sudo install -m 0755 -d /etc/apt/keyrings
@@ -316,233 +695,168 @@ EOF
     return 1
 }
 
-_clone_or_update_project() {
-    local repo_url="$1"
-    local project_dir="$2"
-    local branch="${3:-main}"
+_docker_network_exists() {
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
 
-    print_step "Clone or update project"
-    _ensure_packages git
-
-    if [ -d "$project_dir/.git" ]; then
-        print_info "Project already exists. Pulling latest changes..."
-        cd "$project_dir"
-        git fetch --all
-        git reset --hard "origin/$branch"
-        return
+    if [ -z "$network_name" ]; then
+        print_error "_docker_network_exists: no network name provided and DOCKER_NETWORK_NAME is not set."
+        return 1
     fi
 
-    print_info "Cloning project..."
-    git clone "$repo_url" "$project_dir"
+    _package_installed docker || return 1
+
+    sudo docker network inspect "$network_name" >/dev/null 2>&1
 }
 
-_render_template_file() {
-    local template_file="$1"
-    local output_file="$2"
-    shift 2
-    local -a template_vars=("$@")
+# تطبع subnet شبكة Docker المحددة
+# الاسم التلقائي: من المتغير العام DOCKER_NETWORK_NAME أو bridge (شبكة docker0)
+_get_docker_network_subnet() {
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
 
-    local vars_list=""
-    local -a env_assignments=()
-    local arg var_name
+    if [ -z "$network_name" ]; then
+        print_error "_get_docker_network_subnet: no network name provided and DOCKER_NETWORK_NAME is not set."
+        return 1
+    fi
 
-    for arg in "${template_vars[@]}"; do
-        if [[ "$arg" == *=* ]]; then
-            var_name="${arg%%=*}"
-            env_assignments+=("$arg")
-        else
-            var_name="$arg"
+    _package_installed docker || return 1
+
+    sudo docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$network_name" 2>/dev/null
+}
+
+_create_docker_network() {
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
+    local network_subnet="${2:-${DOCKER_NETWORK_SUBNET:-}}"
+
+    if [ -z "$network_name" ]; then
+        print_error "_create_docker_network: no network name provided and DOCKER_NETWORK_NAME is not set."
+        exit 1
+    fi
+
+    _install_docker
+
+    if _docker_network_exists "$network_name"; then
+        if [ -n "$network_subnet" ]; then
+            local existing_subnet
+            existing_subnet=$(_get_docker_network_subnet "$network_name")
+
+            if [ -n "$existing_subnet" ] && [ "$existing_subnet" != "$network_subnet" ]; then
+                print_error "Docker network '$network_name' already exists with subnet '$existing_subnet', which does not match the requested subnet '$network_subnet'."
+                exit 1
+            fi
         fi
-        vars_list+="\${$var_name} "
-    done
 
-    sudo mkdir -p "$(dirname "$output_file")"
-
-    # envsubst يأتي من حزمة gettext-base
-    _ensure_packages gettext-base
-
-    env "${env_assignments[@]}" envsubst "$vars_list" \
-        < "$template_file" \
-        | sudo tee "$output_file" > /dev/null
-}
-
-_create_systemd_service() {
-    local service_name="$1"
-    local template_file="$2"
-    shift 2
-    local -a template_vars=("$@")
-
-    print_step "Creating Systemd Service: ${service_name}"
-
-    local service_file="/etc/systemd/system/${service_name}.service"
-
-    if _service_exists "$service_name" || [ -f "$service_file" ]; then
-        print_info "Existing service '${service_name}' detected. Destroy it first..."
-        _destroy_service "$service_name" "$service_file"
-        print_info "Old service successfully cleaned up."
-    fi
-
-    print_info "Configuring systemd service file at ${service_file}..."
-
-    _render_template_file "$template_file" "$service_file" "${template_vars[@]}"
-
-    sudo systemctl daemon-reload
-    sudo systemctl enable "${service_name}.service" >/dev/null 2>&1
-
-    
-    print_info "✅ Systemd service ${service_name}.service successfully created and enabled."
-    print_info "for show logs run   sudo journalctl -u $service_name -e"
-}
-
-_ensure_git_compatible() {
-    local min_version="${1:-2.25.0}"
-    local current_version
-
-    _ensure_packages git
-
-    current_version=$(git --version | grep -oP '\d+\.\d+\.\d+')
-
-    if [ "$(printf '%s\n%s\n' "$min_version" "$current_version" | sort -V | head -n1)" != "$min_version" ]; then
-        print_warning "Git $current_version is too old (requires >= $min_version). Updating..."
-        _install_dependencies --only-upgrade git
-        current_version=$(git --version | grep -oP '\d+\.\d+\.\d+')
-    fi
-
-    if [ "$(printf '%s\n%s\n' "$min_version" "$current_version" | sort -V | head -n1)" != "$min_version" ]; then
-        print_error "Git $current_version still does not meet the minimum required version ($min_version). Please update Git manually."
-        return 1
-    fi
-
-    print_info "Git $current_version is compatible (minimum required: $min_version)."
-}
-
-_detect_ssh_port() {
-    local detected_port=""
-
-    detected_port=$(sudo ss -tlnp 2>/dev/null | awk '/sshd/ {n=split($4,a,":"); print a[n]; exit}')
-
-    if [ -z "$detected_port" ] && [ -f /etc/ssh/sshd_config ]; then
-        detected_port=$(grep -iE '^\s*Port\s+[0-9]+' /etc/ssh/sshd_config | awk '{print $2}' | head -n1)
-    fi
-
-    echo "${detected_port:-22}"
-}
-
-# تضيف/تحدث معلومات استخدام سريعة لخدمة تظهر في شاشة الدخول عبر SSH (MOTD)
-# الـ template سكربت جاهز للتشغيل (مثل motd-info.sh.tmpl) ويتم فقط تمرير المتغيرات التي يحتاجها
-# الاستخدام: _add_motd_info <service_name> <template_file> [VAR=value ...]
-_add_motd_info() {
-    local service_name="$1"
-    local template_file="$2"
-    shift 2
-
-    local motd_file="/etc/update-motd.d/99-${service_name}-info"
-
-    _render_template_file "$template_file" "$motd_file" "$@"
-    sudo chmod +x "$motd_file"
-}
-
-# تتحقق أن النظام Ubuntu وأن الإصدار مدعوم، وتطبع الـ codename (مثل jammy)
-# الاستخدام: UBUNTU_CODENAME=$(_get_ubuntu_codename "20.04 22.04 24.04")
-_get_ubuntu_codename() {
-    local supported_versions="$1"
-
-    if [ ! -f /etc/os-release ]; then
-        print_error "Cannot detect OS: /etc/os-release not found." >&2
-        return 1
-    fi
-
-    local os_id version_id codename
-    os_id=$(. /etc/os-release && echo "$ID")
-    version_id=$(. /etc/os-release && echo "$VERSION_ID")
-    codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
-
-    if [ "$os_id" != "ubuntu" ]; then
-        print_error "Unsupported OS '$os_id'. This script supports Ubuntu only." >&2
-        return 1
-    fi
-
-    if [[ " $supported_versions " != *" $version_id "* ]]; then
-        print_error "Unsupported Ubuntu version '$version_id'. Supported versions: $supported_versions" >&2
-        return 1
-    fi
-
-    echo "$codename"
-}
-
-# تقرأ قيمة مفتاح من ملف config بصيغة KEY="value"
-_read_config_value() {
-    local config_file="$1"
-    local key="$2"
-
-    sudo grep -E "^${key}=" "$config_file" 2>/dev/null | head -n 1 | cut -d'"' -f2
-}
-
-# تتحقق من وجود ملف config قديم لخدمة وتخيّر المستخدم: إعادة الضبط من الصفر أو الخروج
-# عند اختيار إعادة الضبط تنفذ أمر التصفية المسجل داخل الكونفج نفسه (CLEANUP_COMMAND)
-# وهو المسؤول عن إيقاف وحذف كل ما يخص الخدمة، ثم تحذف الكونفج ومجلد الخدمة
-_handle_existing_config_file() {
-    local config_file="$1"
-
-    sudo test -f "$config_file" || return 0
-
-    print_step "Existing configuration detected"
-    print_warning "A previous setup config was found at: $config_file"
-    echo
-    sudo cat "$config_file"
-    echo
-
-    if ! _confirm "Remove everything related to this service (including its data) and redo the setup from scratch? (y/n): "; then
-        print_info "Keeping the existing setup. Exiting without changes."
-        exit 0
-    fi
-
-    local service cleanup_command
-    service=$(_read_config_value "$config_file" SERVICE)
-    cleanup_command=$(_read_config_value "$config_file" CLEANUP_COMMAND)
-
-    if [ -n "$cleanup_command" ]; then
-        print_step "Cleaning up previous '${service:-unknown}' installation"
-        sudo bash -c "$cleanup_command" || print_warning "Cleanup command finished with errors. Continuing anyway."
-    else
-        print_warning "No CLEANUP_COMMAND found in the config. Only the config file will be removed."
-    fi
-
-    # حذف معلومات MOTD الخاصة بالخدمة إن وجدت
-    [ -n "$service" ] && sudo rm -f "/etc/update-motd.d/99-${service}-info"
-
-    # حذف ملف الكونفج، ومجلد الخدمة كاملاً إذا كان لها مجلد خاص داخل /root/.configs
-    local parent_dir
-    parent_dir=$(dirname "$config_file")
-    sudo rm -f "$config_file"
-    if [ "$parent_dir" != "/root/.configs" ]; then
-        sudo rm -rf "$parent_dir"
-    fi
-
-    print_info "Previous installation cleaned up. Continuing with a fresh setup..."
-}
-
-# ترفع حظر الجدار الناري (ufw) عن بورت، مع إمكانية تقييد السماح بمصدر محدد
-# لا تفعل شيئاً إذا كان ufw غير مثبت أو غير مفعل
-# الاستخدام: _allow_port_through_firewall <port> [source_subnet]
-_allow_port_through_firewall() {
-    local port="$1"
-    local source_subnet="${2:-}"
-
-    _package_installed ufw || return 0
-
-    if ! sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        print_info "Docker network '$network_name' already exists. Skipping creation."
         return 0
     fi
 
-    if [ -n "$source_subnet" ]; then
-        print_info "UFW is active. Allowing port $port from $source_subnet..."
-        sudo ufw allow from "$source_subnet" to any port "$port" proto tcp >/dev/null
+    print_info "Creating Docker network '$network_name'..."
+
+    if [ -n "$network_subnet" ]; then
+        sudo docker network create --subnet "$network_subnet" "$network_name" >/dev/null
     else
-        print_info "UFW is active. Allowing port $port..."
-        sudo ufw allow "$port/tcp" >/dev/null
+        sudo docker network create "$network_name" >/dev/null
     fi
+
+    print_info "Docker network '$network_name' created successfully."
 }
+
+_container_exists() {
+    _package_installed docker || return 1
+    sudo docker ps -a --format '{{.Names}}' | grep -qx "$1"
+}
+
+# تحذف container مع صورته، وتحذف الشبكات المرتبطة به إذا كانت أنشئت له:
+# شبكة أنشأها compose (تحمل label الخاص به) أو شبكة لم يعد مرتبطاً بها أي container آخر
+_remove_container() {
+    local container_name="$1"
+
+    _container_exists "$container_name" || return 0
+
+    local image networks
+    image=$(sudo docker inspect --format '{{.Config.Image}}' "$container_name" 2>/dev/null || true)
+    networks=$(sudo docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container_name" 2>/dev/null || true)
+
+    print_info "Removing container '$container_name'..."
+    sudo docker rm -f "$container_name" >/dev/null 2>&1 || true
+
+    if [ -n "$image" ]; then
+        if sudo docker rmi "$image" >/dev/null 2>&1; then
+            print_info "Image '$image' removed."
+        else
+            print_warning "Image '$image' is still in use by another container. Skipped removing it."
+        fi
+    fi
+
+    local network compose_label attached_count
+    for network in $networks; do
+        # الشبكات الافتراضية في Docker لا تُحذف أبداً
+        case "$network" in
+            bridge|host|none) continue ;;
+        esac
+
+        _docker_network_exists "$network" || continue
+
+        compose_label=$(sudo docker network inspect --format '{{index .Labels "com.docker.compose.network"}}' "$network" 2>/dev/null || true)
+        attached_count=$(sudo docker network inspect --format '{{len .Containers}}' "$network" 2>/dev/null || echo 1)
+
+        if [ -n "$compose_label" ] || [ "$attached_count" = "0" ]; then
+            if sudo docker network rm "$network" >/dev/null 2>&1; then
+                print_info "Network '$network' removed."
+            else
+                print_warning "Network '$network' is still in use. Skipped removing it."
+            fi
+        fi
+    done
+}
+
+# إذا وجد container بنفس الاسم: تخيير المستخدم بحذفه وإعادة إنشائه (ترجع 0)
+# أو الإبقاء عليه (ترجع 1 ليعرف المستدعي أنه لا حاجة لإنشاء جديد)
+# الحذف يتم عبر _remove_container (الصورة والشبكات الخاصة به تُحذف معه)
+_handle_existing_container() {
+    local container_name="$1"
+
+    _container_exists "$container_name" || return 0
+
+    print_warning "A Docker container named '$container_name' already exists:"
+    sudo docker ps -a --filter "name=^${container_name}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
+    echo
+
+    if _confirm "Remove this container (with its image and its own networks) and create a fresh one? (y/n): "; then
+        _remove_container "$container_name"
+        return 0
+    fi
+
+    print_info "Keeping the existing container."
+    return 1
+}
+
+_wait_for_container() {
+    local container="$1"
+    local timeout="${2:-30}"
+
+    if ! _container_exists "$container"; then
+        print_error "Container '$container' does not exist."
+        return 1
+    fi
+
+    local max_attempts=$((timeout * 5))
+    local attempt=0
+
+    while [[ "$(sudo docker inspect -f '{{.State.Running}}' "$container")" != "true" ]]; do
+        if (( attempt >= max_attempts )); then
+            print_error "Timed out waiting for container '$container' to start."
+            return 1
+        fi
+
+        sleep 0.20
+        ((attempt++)) || true
+    done
+}
+
+
+# ==============================================================================
+# Cloudflare DNS - تحديث سجلات كلاودفلير
+# ==============================================================================
 
 # تنشئ أو تحدّث سجل DNS من نوع A في Cloudflare ليطابق الآي بي العام الحالي للسيرفر
 # الاستخدام: _update_cloudflare_dns [api_token] [zone_id] [domain]
@@ -618,269 +932,3 @@ _update_cloudflare_dns() {
     echo "$response"
     return 1
 }
-
-_docker_network_exists() {
-    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
-
-    if [ -z "$network_name" ]; then
-        print_error "_docker_network_exists: no network name provided and DOCKER_NETWORK_NAME is not set."
-        return 1
-    fi
-
-    _package_installed docker || return 1
-
-    sudo docker network inspect "$network_name" >/dev/null 2>&1
-}
-
-# تطبع subnet شبكة Docker المحددة
-# الاسم التلقائي: من المتغير العام DOCKER_NETWORK_NAME أو bridge (شبكة docker0)
-_get_docker_network_subnet() {
-    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
-
-    if [ -z "$network_name" ]; then
-        print_error "_get_docker_network_subnet: no network name provided and DOCKER_NETWORK_NAME is not set."
-        return 1
-    fi
-
-    _package_installed docker || return 1
-
-    sudo docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$network_name" 2>/dev/null
-}
-
-
-_create_docker_network() {
-    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
-    local network_subnet="${2:-${DOCKER_NETWORK_SUBNET:-}}"
-
-    if [ -z "$network_name" ]; then
-        print_error "_create_docker_network: no network name provided and DOCKER_NETWORK_NAME is not set."
-        exit 1
-    fi
-
-    _install_docker
-
-    if _docker_network_exists "$network_name"; then
-        if [ -n "$network_subnet" ]; then
-            local existing_subnet
-            existing_subnet=$(_get_docker_network_subnet "$network_name")
-
-            if [ -n "$existing_subnet" ] && [ "$existing_subnet" != "$network_subnet" ]; then
-                print_error "Docker network '$network_name' already exists with subnet '$existing_subnet', which does not match the requested subnet '$network_subnet'."
-                exit 1
-            fi
-        fi
-
-        print_info "Docker network '$network_name' already exists. Skipping creation."
-        return 0
-    fi
-
-    print_info "Creating Docker network '$network_name'..."
-
-    if [ -n "$network_subnet" ]; then
-        sudo docker network create --subnet "$network_subnet" "$network_name" >/dev/null
-    else
-        sudo docker network create "$network_name" >/dev/null
-    fi
-
-    print_info "Docker network '$network_name' created successfully."
-}
-
-_container_exists() {
-    _package_installed docker || return 1
-    sudo docker ps -a --format '{{.Names}}' | grep -qx "$1"
-}
-
-
-
-# تحذف container مع صورته، وتحذف الشبكات المرتبطة به إذا كانت أنشئت له:
-# شبكة أنشأها compose (تحمل label الخاص به) أو شبكة لم يعد مرتبطاً بها أي container آخر
-_remove_container() {
-    local container_name="$1"
-
-    _container_exists "$container_name" || return 0
-
-    local image networks
-    image=$(sudo docker inspect --format '{{.Config.Image}}' "$container_name" 2>/dev/null || true)
-    networks=$(sudo docker inspect --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}} {{end}}' "$container_name" 2>/dev/null || true)
-
-    print_info "Removing container '$container_name'..."
-    sudo docker rm -f "$container_name" >/dev/null 2>&1 || true
-
-    if [ -n "$image" ]; then
-        if sudo docker rmi "$image" >/dev/null 2>&1; then
-            print_info "Image '$image' removed."
-        else
-            print_warning "Image '$image' is still in use by another container. Skipped removing it."
-        fi
-    fi
-
-    local network compose_label attached_count
-    for network in $networks; do
-        # الشبكات الافتراضية في Docker لا تُحذف أبداً
-        case "$network" in
-            bridge|host|none) continue ;;
-        esac
-
-        _docker_network_exists "$network" || continue
-
-        compose_label=$(sudo docker network inspect --format '{{index .Labels "com.docker.compose.network"}}' "$network" 2>/dev/null || true)
-        attached_count=$(sudo docker network inspect --format '{{len .Containers}}' "$network" 2>/dev/null || echo 1)
-
-        if [ -n "$compose_label" ] || [ "$attached_count" = "0" ]; then
-            if sudo docker network rm "$network" >/dev/null 2>&1; then
-                print_info "Network '$network' removed."
-            else
-                print_warning "Network '$network' is still in use. Skipped removing it."
-            fi
-        fi
-    done
-}
-
-# إذا وجد container بنفس الاسم: تخيير المستخدم بحذفه وإعادة إنشائه (ترجع 0)
-# أو الإبقاء عليه (ترجع 1 ليعرف المستدعي أنه لا حاجة لإنشاء جديد)
-# الحذف يتم عبر _remove_container (الصورة والشبكات الخاصة به تُحذف معه)
-_handle_existing_container() {
-    local container_name="$1"
-
-    _container_exists "$container_name" || return 0
-
-    print_warning "A Docker container named '$container_name' already exists:"
-    sudo docker ps -a --filter "name=^${container_name}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-    echo
-
-    if _confirm "Remove this container (with its image and its own networks) and create a fresh one? (y/n): "; then
-        _remove_container "$container_name"
-        return 0
-    fi
-
-    print_info "Keeping the existing container."
-    return 1
-}
-
-_download_github_path() {
-    local repo_url="$1"
-    local repo_path="$2"
-    local destination="$3"
-    local branch="${4:-main}"
-    local min_git_version="${5:-2.25.0}"
-
-    if [ -z "$repo_url" ] || [ -z "$repo_path" ] || [ -z "$destination" ]; then
-        print_error "Usage: _download_github_path <repo_url> <path_in_repo> <destination> [branch] [min_git_version]"
-        return 1
-    fi
-
-    _ensure_git_compatible "$min_git_version" || return 1
-
-    print_step "Download '$repo_path' from $repo_url"
-
-    local tmp_dir
-    tmp_dir=$(mktemp -d)
-
-    print_info "Fetching repository metadata (sparse checkout)..."
-    if ! git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$branch" "$repo_url" "$tmp_dir"; then
-        print_error "Failed to clone repository '$repo_url' (branch: $branch)."
-        rm -rf "$tmp_dir"
-        return 1
-    fi
-
-    (
-        cd "$tmp_dir" || exit 1
-        git sparse-checkout set "$repo_path"
-    )
-
-    local source_path="$tmp_dir/$repo_path"
-
-    if [ ! -e "$source_path" ]; then
-        print_error "Path '$repo_path' was not found in the repository."
-        rm -rf "$tmp_dir"
-        return 1
-    fi
-
-    
-
-    if [ -d "$source_path" ]; then
-        rm -rf "$destination"
-        mkdir -p "$destination"
-        cp -r "$source_path/." "$destination/"
-    else
-        rm -f "$destination"
-        mkdir -p "$(dirname "$destination")"
-        cp "$source_path" "$destination"
-    fi
-
-    rm -rf "$tmp_dir"
-
-    print_info "Downloaded '$repo_path' to '$destination'."
-}
-
-# تنزّل سكربتاً من مستودع GitHub (خاص أو عام) وتشغّله عبر bash
-# تستخرج التوكن من ~/.git-credentials بعد تفعيل credential.helper store
-# الاستخدام: _run_github_script [github_user] [repo] [script_path] [branch]
-# القيم التلقائية من المتغيرات العامة: GITHUB_USER / GITHUB_REPO / GITHUB_SCRIPT_PATH / GITHUB_BRANCH
-_run_github_script() {
-    local github_user="${1:-${GITHUB_USER:-eeeob}}"
-    local repo="${2:-${GITHUB_REPO:-}}"
-    local script_path="${3:-${GITHUB_SCRIPT_PATH:-}}"
-    local branch="${4:-${GITHUB_BRANCH:-main}}"
-
-    if [ -z "$repo" ] || [ -z "$script_path" ]; then
-        print_error "_run_github_script: repo and script_path are required (args or GITHUB_* globals)."
-        return 1
-    fi
-
-    _ensure_packages git curl
-
-    print_info "Enabling Git credential storage..."
-    git config --global credential.helper store
-
-    print_info "Testing GitHub access to ${github_user}/${repo}..."
-    if ! git ls-remote "https://github.com/${github_user}/${repo}.git" >/dev/null; then
-        print_error "GitHub authentication failed for ${github_user}/${repo}."
-        return 1
-    fi
-
-    if [ ! -f "$HOME/.git-credentials" ]; then
-        print_error "Git credentials not found at ~/.git-credentials."
-        return 1
-    fi
-
-    local token
-    token=$(grep "github.com" "$HOME/.git-credentials" | tail -n1 | sed -E 's#https://[^:]+:([^@]+)@.*#\1#')
-
-    if [ -z "$token" ]; then
-        print_error "Could not extract GitHub token from ~/.git-credentials."
-        return 1
-    fi
-
-    print_info "Downloading and running '${script_path}' from ${github_user}/${repo} (${branch})..."
-    curl -fsSL \
-        -H "Authorization: token ${token}" \
-        -H "Accept: application/vnd.github.raw" \
-        "https://api.github.com/repos/${github_user}/${repo}/contents/${script_path}?ref=${branch}" \
-        | bash
-}
-
-_wait_for_container() {
-    local container="$1"
-    local timeout="${2:-30}"
-    
-    if ! _container_exists "$container"; then
-        print_error "Container '$container' does not exist."
-        return 1
-    fi
-
-    local max_attempts=$((timeout * 5))
-    local attempt=0
-
-    while [[ "$(sudo docker inspect -f '{{.State.Running}}' "$container")" != "true" ]]; do
-        if (( attempt >= max_attempts )); then
-            print_error "Timed out waiting for container '$container' to start."
-            return 1
-        fi
-
-        sleep 0.20
-        ((attempt++)) || true
-    done
-}
-
-
