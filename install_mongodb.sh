@@ -181,7 +181,9 @@ write_config() {
     print_step "Writing config file"
 
     local cleanup_script="$CONFIG_DIR/cleanup.sh"
-    local container_name=""
+
+    local docker_container_name=""
+    local docker_network_name=""
 
 
     if [ "$INSTALL_METHOD" = "native" ]; then
@@ -189,7 +191,8 @@ write_config() {
             APT_SOURCE_FILE="/etc/apt/sources.list.d/mongodb-org-${MONGO_VERSION}.list" \
             KEYRING_FILE="/usr/share/keyrings/mongodb-server-${MONGO_VERSION}.gpg"
     else
-        container_name="$DOCKER_CONTAINER_NAME"
+        docker_container_name="$DOCKER_CONTAINER_NAME"
+        docker_network_name="$DOCKER_NETWORK_NAME"
 
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_docker.sh.template" "$cleanup_script" \
             COMPOSE_FILE="$DOCKER_COMPOSE_FILE" \
@@ -202,8 +205,10 @@ write_config() {
         INSTALL_METHOD="$INSTALL_METHOD" \
         BIND_IP="$BIND_IP" \
         PORT="$PORT" \
-        DOCKER_CONTAINER_NAME="$container_name" \
-        CLEANUP_COMMAND="bash $cleanup_script"
+        CLEANUP_COMMAND="bash $cleanup_script" \
+        DOCKER_CONTAINER_NAME="$docker_container_name" \
+        DOCKER_NETWORK_NAME="$docker_network_name" 
+        
 
     print_info "Config saved to $CONFIG_FILE"
 }

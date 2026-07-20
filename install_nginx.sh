@@ -15,15 +15,14 @@ set -e
 # جلب الدوال المشتركة من utils.sh
 sudo apt-get update -y && sudo apt-get install -y curl && source <(curl -fsSL https://raw.githubusercontent.com/eeeob/scripts/main/utils.sh)
 
-CONFIG_DIR="/root/.configs/nginx"
-CONFIG_FILE="$CONFIG_DIR/nginx_install.conf"
-COMPOSE_FILE="$CONFIG_DIR/docker-compose.yml"
-CLEANUP_SCRIPT="$CONFIG_DIR/cleanup.sh"
+
+#shared
 CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
-CONTAINER_NAME="nginx"
-INSTALL_METHOD="native"
-SERVER_NAME=""
-RESTART_COMMAND=""
+
+TEMP_CONFIG_DIR="/root/.temp_configs/nginx"
+CONFIG_DIR="/root/.configs/nginx"
+
+CONFIG_FILE="$CONFIG_DIR/nginx_install.conf"
 
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 LOCATIONS_DIR="/etc/nginx/locations"
@@ -31,10 +30,24 @@ CERTS_DIR="/etc/nginx/certs"
 CERT_FILE="$CERTS_DIR/cloudflare-origin.pem"
 KEY_FILE="$CERTS_DIR/cloudflare-origin.key"
 
+SERVER_NAME=""
+INSTALL_METHOD=""
+RESTART_COMMAND=""
+NGINX_FULL_VERSION="unknown"
+
+#native
+UBUNTU_CODENAME=$(_get_ubuntu_codename "20.04 22.04 24.04")
+
+#docker
+DOCKER_COMPOSE_FILE="$CONFIG_DIR/docker-compose.yml"
+DOCKER_CONTAINER_NAME="nginx"
+DOCKER_NETWORK_NAME="main_network"
+
+
 # التعرف على الأعلام المشتركة (-y موافقة / -n رفض تلقائي) مع إعادة تعيين باقي args للسكربت
 eval "$(_parse_common_flags --reset "$@")"
 
-# الأعلام الخاصة بالسكربت
+# الأعلام الخاصة بالسكربت (-d للدومين)
 while getopts "d:" opt; do
     case "${opt}" in
         d) SERVER_NAME="${OPTARG}" ;;
@@ -43,35 +56,66 @@ while getopts "d:" opt; do
 done
 
 # --- كشف تثبيت سابق موجود فعلياً لكن غير موثق في ملف config (حالة مخفية) ---
+# عند وجود تثبيت شغّال وموافقة المستخدم على المتابعة، تتم تصفيته بالكامل بالطرق الرسمية
 detect_previous_installation() {
+    local found_native="no"
+    local found_docker="no"
     local found=""
 
-    dpkg -s nginx >/dev/null 2>&1 && found="native package 'nginx'"
+    if _package_installed nginx || _service_exists nginx; then
+        found_native="yes"
+        found="native package 'nginx'"
+    fi
 
-    if command -v docker >/dev/null 2>&1 && _container_exists "$CONTAINER_NAME"; then
-        found="${found:+$found + }Docker container '$CONTAINER_NAME'"
+    if _container_exists "$DOCKER_CONTAINER_NAME"; then
+        found_docker="yes"
+        found="${found:+$found + }Docker container '$DOCKER_CONTAINER_NAME'"
     fi
 
     [ -z "$found" ] && return 0
 
     print_warning "Existing Nginx installation detected on this server: $found."
 
-    if ! _confirm "Continue and reconfigure on top of the existing installation? (y/n): "; then
+    if ! _confirm "Remove the existing installation completely (official cleanup) and reinstall from scratch? (y/n): "; then
         print_info "Aborted by user. Nothing was changed."
         exit 0
     fi
+
+    print_step "Removing the existing Nginx installation (official cleanup)"
+
+    # تصفية التثبيت المباشر بالطرق الرسمية (إيقاف الخدمة، إزالة الحزم والمصادر والاعدادات)
+    # ملاحظة: يتم الإبقاء على مجلد الشهادات لتجنب فقدان شهادة Cloudflare Origin
+    if [ "$found_native" = "yes" ]; then
+        print_info "Cleaning up the native Nginx installation..."
+        _destroy_service "nginx"
+        sudo apt-get purge -y nginx 2>/dev/null || true
+        sudo apt-get autoremove -y 2>/dev/null || true
+        sudo rm -f /etc/apt/sources.list.d/nginx.list
+        sudo rm -f /usr/share/keyrings/nginx-archive-keyring.gpg
+        sudo rm -f "$NGINX_CONF_DIR/default.conf" "$NGINX_CONF_DIR/cloudflare.conf"
+        sudo rm -rf "$LOCATIONS_DIR"
+    fi
+
+    # تصفية تثبيت Docker (حذف الحاوية مع صورتها وشبكاتها الخاصة)
+    if [ "$found_docker" = "yes" ]; then
+        print_info "Cleaning up the Docker Nginx installation..."
+        _remove_container "$DOCKER_CONTAINER_NAME"
+    fi
+
+    print_info "Existing Nginx installation removed. Continuing with a fresh setup..."
 }
 
-# --- تخيير المستخدم بين التثبيت المباشر أو داخل Docker ---
-choose_install_method() {
-    print_step "Choose installation method"
-    print_info "Native = official apt repo (nginx.org). Docker = official 'nginx' image via compose."
+# --- التأكد من تحديد الدومين (من العلم -d أو تفاعلياً) ---
+ensure_domain() {
+    print_step "Domain configuration"
 
-    if _confirm "Install Nginx inside Docker instead of the native installation? (y/n): "; then
-        INSTALL_METHOD="docker"
+    if [ -n "$SERVER_NAME" ]; then
+        _check_variable_required "SERVER_NAME" "$SERVER_NAME" '^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
     else
-        INSTALL_METHOD="native"
+        _prompt_required "Enter your domain (e.g. example.com): " SERVER_NAME '^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
     fi
+
+    print_info "Domain: $SERVER_NAME"
 }
 
 # --- التحقق من أن البورتين 80 و 443 غير مستخدمين من خدمات أخرى ---
@@ -100,19 +144,9 @@ check_ports() {
     fi
 }
 
-# --- التأكد من تحديد الدومين ---
-ensure_domain() {
-    if [ -n "$SERVER_NAME" ]; then
-        _check_variable_required "SERVER_NAME" "$SERVER_NAME" '^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
-    else
-        _prompt_required "Enter your domain (e.g. example.com): " SERVER_NAME '^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'
-    fi
-    print_info "Domain: $SERVER_NAME"
-}
-
-# --- التأكد من وجود شهادة Cloudflare Origin أو توفير بديل مؤقت ---
+# --- طلب شهادة Cloudflare Origin أو توليد شهادة مؤقتة موقّعة ذاتياً ---
 ensure_certificates() {
-    print_step "Checking TLS certificates"
+    print_step "Cloudflare Origin certificates"
 
     if sudo test -f "$CERT_FILE" && sudo test -f "$KEY_FILE"; then
         print_info "Existing certificates found in $CERTS_DIR. Keeping them."
@@ -131,9 +165,11 @@ ensure_certificates() {
             print_error "Certificate or key file is still empty. Nginx will fail to start on 443."
             exit 1
         fi
+        print_info "Cloudflare Origin certificate saved."
     else
         # شهادة self-signed مؤقتة حتى يعمل nginx، تُستبدل لاحقاً بشهادة Cloudflare الحقيقية
         print_warning "Generating a TEMPORARY self-signed certificate so Nginx can start..."
+        _ensure_packages openssl
         sudo openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
             -keyout "$KEY_FILE" -out "$CERT_FILE" -subj "/CN=${SERVER_NAME}" >/dev/null 2>&1
         sudo chmod 600 "$KEY_FILE"
@@ -150,22 +186,29 @@ deploy_nginx_config() {
     sudo mkdir -p "$NGINX_CONF_DIR" "$LOCATIONS_DIR" "$CERTS_DIR"
 
     # الاعدادات الأساسية (خلف Cloudflare) مع استبدال الدومين
-    _render_template_file "$ASSETS_DIR/nginx/conf/default.conf.template" "$NGINX_CONF_DIR/default.conf" \
+    _render_template_file "$TEMP_CONFIG_DIR/conf/default.conf.template" "$NGINX_CONF_DIR/default.conf" \
         SERVER_NAME="$SERVER_NAME"
 
-    # تعريف $is_cloudflare (يُحمّل قبل default.conf أبجدياً)
-    sudo cp "$ASSETS_DIR/nginx/conf/cloudflare.conf" "$NGINX_CONF_DIR/cloudflare.conf"
+    # تعريف $is_cloudflare (نطاقات Cloudflare الرسمية)
+    sudo cp "$TEMP_CONFIG_DIR/conf/cloudflare.conf" "$NGINX_CONF_DIR/cloudflare.conf"
 
-    # مثال جاهز لملف location منفصل (لا يُحمّل لأن امتداده .example)
-    sudo cp "$ASSETS_DIR/nginx/locations-examples/api_proxy.conf.example" "$LOCATIONS_DIR/"
+    # مثال جاهز لملف location منفصل (لا يُحمّل لأن امتداده .example وليس .conf)
+    sudo cp "$TEMP_CONFIG_DIR/locations-examples/api_proxy.conf.example" "$LOCATIONS_DIR/"
 
     print_info "Base config deployed to $NGINX_CONF_DIR/default.conf"
     print_info "Put your per-service location blocks in $LOCATIONS_DIR/*.conf"
 }
 
-# --- التثبيت المباشر من المستودع الرسمي ---
+# --- التثبيت المباشر من المستودع الرسمي (nginx.org) ---
 install_native() {
+    if _package_installed nginx || _service_exists nginx; then
+        print_error "A native Nginx installation still exists. Aborting to avoid a broken setup."
+        exit 1
+    fi
+
     print_step "Installing Nginx (native, official nginx.org repo)"
+
+    _ensure_packages gnupg ca-certificates
 
     curl -fsSL https://nginx.org/keys/nginx_signing.key | \
         sudo gpg --dearmor --yes -o /usr/share/keyrings/nginx-archive-keyring.gpg
@@ -173,8 +216,7 @@ install_native() {
     echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] http://nginx.org/packages/ubuntu ${UBUNTU_CODENAME} nginx" | \
         sudo tee /etc/apt/sources.list.d/nginx.list >/dev/null
 
-    sudo apt-get update -y
-    sudo apt-get install -y nginx
+    _install_dependencies nginx
 
     deploy_nginx_config
 
@@ -183,22 +225,34 @@ install_native() {
 
     sudo systemctl enable nginx >/dev/null 2>&1
     sudo systemctl restart nginx
+    _wait_for_service "nginx" 10
 
+    NGINX_FULL_VERSION=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+' || echo "unknown")
     RESTART_COMMAND="sudo systemctl restart nginx"
+    INSTALL_METHOD="native"
+
+    print_info "Nginx is running (native) on ports 80 and 443."
 }
 
 # --- التثبيت داخل Docker عبر compose من الصورة الرسمية ---
 install_in_docker() {
+    if _container_exists "$DOCKER_CONTAINER_NAME"; then
+        print_error "A Docker container named '$DOCKER_CONTAINER_NAME' still exists. Aborting to avoid a conflict."
+        exit 1
+    fi
+
     print_step "Installing Nginx (Docker Compose, official image)"
 
     _install_docker
+    _create_docker_network
 
     deploy_nginx_config
 
     # ملف compose الحقيقي يُحفظ في /root/.configs/nginx ويبقى للاستخدام لاحقاً
-    sudo mkdir -p "$CONFIG_DIR"
-    sudo cp "$ASSETS_DIR/nginx/docker-compose.yml" "$COMPOSE_FILE"
-    print_info "Compose file saved to $COMPOSE_FILE"
+    _render_template_file "$TEMP_CONFIG_DIR/docker-compose.yml.template" "$DOCKER_COMPOSE_FILE" \
+        CONTAINER_NAME="$DOCKER_CONTAINER_NAME" \
+        NETWORK_NAME="$DOCKER_NETWORK_NAME"
+    print_info "Compose file saved to $DOCKER_COMPOSE_FILE"
 
     print_info "Testing Nginx configuration inside a temporary container..."
     sudo docker run --rm \
@@ -207,75 +261,43 @@ install_in_docker() {
         -v "$CERTS_DIR":/etc/nginx/certs:ro \
         nginx:stable nginx -t
 
-    if _handle_existing_container "$CONTAINER_NAME"; then
-        sudo docker compose -f "$COMPOSE_FILE" up -d
-        print_info "Nginx container started on ports 80 and 443."
-    else
-        sudo docker start "$CONTAINER_NAME" >/dev/null 2>&1 || true
-        print_info "Existing container kept and started."
-    fi
+    sudo docker compose -f "$DOCKER_COMPOSE_FILE" up -d
+    _wait_for_container "$DOCKER_CONTAINER_NAME" 10
 
-    RESTART_COMMAND="sudo docker compose -f $COMPOSE_FILE restart"
-}
+    NGINX_FULL_VERSION=$(sudo docker exec "$DOCKER_CONTAINER_NAME" nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+' || echo "unknown")
+    RESTART_COMMAND="sudo docker compose -f $DOCKER_COMPOSE_FILE restart"
+    INSTALL_METHOD="docker"
 
-# --- التحقق من نجاح التثبيت ---
-verify_installation() {
-    print_step "Verify installation"
-
-    if [ "$INSTALL_METHOD" = "native" ]; then
-        nginx -v 2>&1 | head -n 1
-        NGINX_FULL_VERSION=$(nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+' || echo "unknown")
-
-        if sudo systemctl is-active --quiet nginx; then
-            print_info "Nginx service is running."
-        else
-            print_error "Nginx service is NOT running. Check: sudo journalctl -u nginx -e"
-            exit 1
-        fi
-    else
-        sudo docker ps --filter "name=^${CONTAINER_NAME}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-        NGINX_FULL_VERSION=$(sudo docker exec "$CONTAINER_NAME" nginx -v 2>&1 | grep -oP 'nginx/\K[0-9.]+' || echo "unknown")
-
-        if ! sudo docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
-            print_error "Nginx container is NOT running. Check: sudo docker logs $CONTAINER_NAME"
-            exit 1
-        fi
-        print_info "Nginx container is running."
-    fi
-
-    # فحص استجابة HTTP فعلي (المتوقع 301 لأن البورت 80 يحول إلى HTTPS)
-    local http_code
-    http_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1/" -H "Host: $SERVER_NAME" || echo "000")
-    print_info "HTTP check on 127.0.0.1:80 returned status: $http_code (301 is expected)"
+    print_info "Nginx container started on ports 80 and 443."
 }
 
 # --- كتابة ملف config يوثق تفاصيل التثبيت مع توليد سكربت التصفية ---
 write_config() {
     print_step "Writing config file"
 
-    sudo mkdir -p "$CONFIG_DIR"
+    local cleanup_script="$CONFIG_DIR/cleanup.sh"
 
     # توليد سكربت التصفية الحقيقي المطابق لطريقة التثبيت الحالية
     if [ "$INSTALL_METHOD" = "native" ]; then
-        _render_template_file "$ASSETS_DIR/nginx/cleanup_native.sh.template" "$CLEANUP_SCRIPT" \
+        _render_template_file "$TEMP_CONFIG_DIR/cleanup_native.sh.template" "$cleanup_script" \
             LOCATIONS_DIR="$LOCATIONS_DIR" \
             CERTS_DIR="$CERTS_DIR"
     else
-        _render_template_file "$ASSETS_DIR/nginx/cleanup_docker.sh.template" "$CLEANUP_SCRIPT" \
-            COMPOSE_FILE="$COMPOSE_FILE" \
-            CONTAINER_NAME="$CONTAINER_NAME" \
+        _render_template_file "$TEMP_CONFIG_DIR/cleanup_docker.sh.template" "$cleanup_script" \
+            COMPOSE_FILE="$DOCKER_COMPOSE_FILE" \
+            CONTAINER_NAME="$DOCKER_CONTAINER_NAME" \
             LOCATIONS_DIR="$LOCATIONS_DIR" \
             CERTS_DIR="$CERTS_DIR"
     fi
-    sudo chmod +x "$CLEANUP_SCRIPT"
+    sudo chmod +x "$cleanup_script"
 
-    _render_template_file "$ASSETS_DIR/nginx/nginx_install.conf.template" "$CONFIG_FILE" \
+    _render_template_file "$TEMP_CONFIG_DIR/nginx_install.conf.template" "$CONFIG_FILE" \
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
         INSTALL_METHOD="$INSTALL_METHOD" \
         NGINX_VERSION="$NGINX_FULL_VERSION" \
         SERVER_NAME="$SERVER_NAME" \
         RESTART_COMMAND="$RESTART_COMMAND" \
-        CLEANUP_COMMAND="bash $CLEANUP_SCRIPT"
+        CLEANUP_COMMAND="bash $cleanup_script"
 
     print_info "Config saved to $CONFIG_FILE"
 }
@@ -285,9 +307,9 @@ add_ssh_quick_info() {
     print_step "Adding quick usage info to the SSH login screen"
 
     local test_command="sudo nginx -t"
-    [ "$INSTALL_METHOD" = "docker" ] && test_command="sudo docker exec $CONTAINER_NAME nginx -t"
+    [ "$INSTALL_METHOD" = "docker" ] && test_command="sudo docker exec $DOCKER_CONTAINER_NAME nginx -t"
 
-    _add_motd_info "nginx" "$ASSETS_DIR/nginx/motd-info.sh.tmpl" \
+    _add_motd_info "nginx" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
         SERVER_NAME="$SERVER_NAME" \
         RESTART_COMMAND="$RESTART_COMMAND" \
         TEST_COMMAND="$test_command" \
@@ -298,31 +320,25 @@ add_ssh_quick_info() {
     print_info "Quick usage info will appear on the next SSH login."
 }
 
-UBUNTU_CODENAME=$(_get_ubuntu_codename "20.04 22.04 24.04")
-print_info "Detected supported Ubuntu release: $UBUNTU_CODENAME"
+trap 'rm -rf "$TEMP_CONFIG_DIR"' EXIT
 
 _handle_existing_config_file "$CONFIG_FILE"
 detect_previous_installation
-choose_install_method
-check_ports
+_download_github_path "$CONFIGS_REPO_URL" "nginx" "$TEMP_CONFIG_DIR"
+
 ensure_domain
-
-_install_dependencies gnupg ca-certificates openssl
-
-# جلب الملفات المساعدة من مشروع configs إلى مجلد مؤقت يُحذف عند الخروج
-ASSETS_DIR=$(mktemp -d)
-trap 'rm -rf "$ASSETS_DIR"' EXIT
-_download_github_path "$CONFIGS_REPO_URL" "nginx" "$ASSETS_DIR/nginx"
-
+check_ports
 ensure_certificates
 
-if [ "$INSTALL_METHOD" = "native" ]; then
-    install_native
-else
+print_step "Choose installation method"
+print_info "Native = official apt repo (nginx.org). Docker = official 'nginx' image via compose."
+
+if _confirm "Install Nginx inside Docker instead of the native installation? (y/n): "; then
     install_in_docker
+else
+    install_native
 fi
 
-verify_installation
 write_config
 add_ssh_quick_info
 

@@ -14,7 +14,9 @@ set -e
 sudo apt-get update -y && sudo apt-get install -y curl && source <(curl -fsSL https://raw.githubusercontent.com/eeeob/scripts/main/utils.sh)
 
 TEMP_CONFIG_DIR="/root/.temp_configs/ufw"
-CONFIG_FILE="/root/.configs/ufw_setup.conf"
+CONFIG_DIR="/root/.configs/ufw"
+
+CONFIG_FILE="${CONFIG_DIR}/ufw_setup.conf"
 
 CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
 OLD_RULES_RESET="no"
