@@ -13,33 +13,48 @@ set -e
 # جلب الدوال المشتركة من utils.sh
 sudo apt-get update -y && sudo apt-get install -y curl && source <(curl -fsSL https://raw.githubusercontent.com/eeeob/scripts/main/utils.sh)
 
+
+#shared
+CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
+
 TEMP_CONFIG_DIR="/root/.temp_configs/mongodb"
 CONFIG_DIR="/root/.configs/mongodb"
 
 CONFIG_FILE="$CONFIG_DIR/mongodb_install.conf"
-DOCKER_COMPOSE_FILE="$CONFIG_DIR/docker-compose.yml"
-
-CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
 
 MONGO_VERSION="8.0"
+PORT="27017"
 
-DOCKER_CONTAINER_NAME="mongodb"
-BIND_IP="127.0.0.1"
+BIND_IP=""
+INSTALL_METHOD=""
 
+
+#native
 UBUNTU_CODENAME=$(_get_ubuntu_codename "20.04 22.04 24.04")
 
-INSTALL_METHOD=""
+#docker
+DOCKER_COMPOSE_FILE="$CONFIG_DIR/docker-compose.yml"
+DOCKER_CONTAINER_NAME="mongodb"
+DOCKER_NETWORK_NAME="main_network"
+
 
 # التعرف على الأعلام المشتركة (-y موافقة / -n رفض تلقائي) مع إعادة تعيين باقي args للسكربت
 eval "$(_parse_common_flags --reset "$@")"
 
 # --- كشف تثبيت سابق موجود فعلياً لكن غير موثق في ملف config (حالة مخفية) ---
+# عند وجود تثبيت شغّال وموافقة المستخدم على المتابعة، تتم تصفيته بالكامل بالطرق الرسمية
 detect_previous_installation() {
+    local found_native="no"
+    local found_docker="no"
     local found=""
 
-    dpkg -s mongodb-org >/dev/null 2>&1 && found="native package 'mongodb-org'"
+    if _package_installed mongodb-org || _service_exists mongod; then
+        found_native="yes"
+        found="native package 'mongodb-org'"
+    fi
 
-    if command -v docker >/dev/null 2>&1 && _container_exists "$DOCKER_CONTAINER_NAME"; then
+    if _container_exists "$DOCKER_CONTAINER_NAME"; then
+        found_docker="yes"
         found="${found:+$found + }Docker container '$DOCKER_CONTAINER_NAME'"
     fi
 
@@ -47,29 +62,43 @@ detect_previous_installation() {
 
     print_warning "Existing MongoDB installation detected on this server: $found."
 
-    if ! _confirm "Continue and reconfigure on top of the existing installation? (y/n): "; then
+    if ! _confirm "Remove the existing installation completely (official cleanup) and reinstall from scratch? (y/n): "; then
         print_info "Aborted by user. Nothing was changed."
         exit 0
     fi
-}
 
-# --- تخيير المستخدم بين التثبيت المباشر أو داخل Docker ---
-choose_install_method() {
-    print_step "Choose installation method"
-    print_info "Native = official apt repo (repo.mongodb.org). Docker = official 'mongo' image."
+    print_step "Removing the existing MongoDB installation (official cleanup)"
 
-    if _confirm "Install MongoDB inside Docker instead of the native installation? (y/n): "; then
-        INSTALL_METHOD="docker"
-    else
-        INSTALL_METHOD="native"
+    # تصفية التثبيت المباشر بالطرق الرسمية (إيقاف الخدمة، إزالة الحزم والمصادر والبيانات)
+    if [ "$found_native" = "yes" ]; then
+        print_info "Cleaning up the native MongoDB installation..."
+        _destroy_service "mongod"
+        sudo apt-get purge -y "mongodb-org*" 2>/dev/null || true
+        sudo apt-get autoremove -y 2>/dev/null || true
+        sudo rm -f /etc/apt/sources.list.d/mongodb-org-*.list
+        sudo rm -f /usr/share/keyrings/mongodb-server-*.gpg
+        sudo rm -rf /var/lib/mongodb /var/log/mongodb
     fi
+
+    # تصفية تثبيت Docker (حذف الحاوية مع صورتها وشبكاتها الخاصة)
+    if [ "$found_docker" = "yes" ]; then
+        print_info "Cleaning up the Docker MongoDB installation..."
+        _remove_container "$DOCKER_CONTAINER_NAME"
+    fi
+
+    print_info "Existing MongoDB installation removed. Continuing with a fresh setup..."
 }
 
-# --- التثبيت المباشر من المستودع الرسمي ---
+
 install_native() {
+    if _package_installed mongodb-org || _package_installed mongod || _service_exists mongod; then
+        print_error "A native MongoDB installation still exists. Aborting to avoid a broken setup."
+        exit 1
+    fi
+
     print_step "Installing MongoDB ${MONGO_VERSION} (native, official repo)"
     
-    _install_dependencies gnupg ca-certificates
+    _ensure_packages gnupg ca-certificates
 
     curl -fsSL "https://pgp.mongodb.com/server-${MONGO_VERSION}.asc" | \
         sudo gpg --dearmor --yes -o "/usr/share/keyrings/mongodb-server-${MONGO_VERSION}.gpg"
@@ -87,8 +116,12 @@ install_native() {
     sudo systemctl enable mongod >/dev/null 2>&1
     sudo systemctl restart mongod
 
+    BIND_IP="127.0.0.1"
+    INSTALL_METHOD="native"
+
     if ! _confirm "Make MongoDB accessible to Docker containers via docker0 (172.17.0.1)? (y/n): "; then
         print_info "Skipping Docker access configuration."
+        _wait_for_service "mongod" 10
         return 0
     fi
 
@@ -96,9 +129,10 @@ install_native() {
 
     print_step "Configuring MongoDB bindIp for docker0"
 
-    sudo sed -i -E 's/^([[:space:]]*)bindIp:.*/\1bindIp: 127.0.0.1,172.17.0.1/' /etc/mongod.conf
     BIND_IP="127.0.0.1,172.17.0.1"
 
+    sudo sed -i -E "s/^([[:space:]]*)bindIp:.*/\1bindIp: $BIND_IP/" /etc/mongod.conf
+    
     # ربط mongod بـ docker.service حتى لا يفشل عند الإقلاع قبل ظهور docker0 (exit code 48)
     sudo mkdir -p /etc/systemd/system/mongod.service.d
     sudo cp "$TEMP_CONFIG_DIR/mongod_docker_override.conf" /etc/systemd/system/mongod.service.d/override.conf
@@ -107,51 +141,39 @@ install_native() {
     sudo systemctl restart mongod
     
     print_info "MongoDB is now bound to 127.0.0.1 and 172.17.0.1 with a systemd dependency on docker.service."
+
+    _wait_for_service "mongod" 10
+    
 }
 
 # --- التثبيت داخل Docker عبر compose من الصورة الرسمية ---
 install_in_docker() {
+    if _container_exists "$DOCKER_CONTAINER_NAME"; then
+        print_error "A Docker container named '$DOCKER_CONTAINER_NAME' still exists. Aborting to avoid a conflict."
+        exit 1
+    fi
+
     print_step "Installing MongoDB ${MONGO_VERSION} (Docker Compose, official image)"
 
     _install_docker
-    _create_docker_network
+    _create_docker_network 
 
-    
-    _render_template_file "$TEMP_CONFIG_DIR/docker-compose.yml.template" "$DOCKER_COMPOSE_FILE" MONGO_VERSION="$MONGO_VERSION"
-    
+    BIND_IP="127.0.0.1"
+
+    _render_template_file "$TEMP_CONFIG_DIR/docker-compose.yml.template" "$DOCKER_COMPOSE_FILE" \
+        MONGO_VERSION="$MONGO_VERSION" \
+        CONTAINER_NAME="$DOCKER_CONTAINER_NAME" \
+        PORT="$PORT" \
+        BIND_IP="$BIND_IP" \
+        NETWORK_NAME="$DOCKER_NETWORK_NAME"
+
     print_info "Compose file saved to $DOCKER_COMPOSE_FILE"
+    sudo docker compose -f "$DOCKER_COMPOSE_FILE" up -d
+    _wait_for_container "$DOCKER_CONTAINER_NAME" 10
 
-    if _handle_existing_container "$DOCKER_CONTAINER_NAME"; then
-        sudo docker compose -f "$DOCKER_COMPOSE_FILE" up -d
-        print_info "MongoDB container started (port 27017 published on 127.0.0.1 only)."
-    else
-        sudo docker start "$DOCKER_CONTAINER_NAME" >/dev/null 2>&1 || true
-        print_info "Existing container kept and started."
-    fi
-}
+    INSTALL_METHOD="docker"
 
-# --- التحقق من نجاح التثبيت ---
-verify_installation() {
-    print_step "Verify installation"
-
-    if [ "$INSTALL_METHOD" = "native" ]; then
-        mongod --version | head -n 1
-        
-        if sudo systemctl is-active --quiet mongod; then
-            print_info "MongoDB service is running."
-        else
-            print_error "MongoDB service is NOT running. Check: sudo journalctl -u mongod -e"
-            exit 1
-        fi
-    else
-        sudo docker ps --filter "name=^${DOCKER_CONTAINER_NAME}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-
-        if ! _container_exists "$DOCKER_CONTAINER_NAME" || ! sudo docker ps --format '{{.Names}}' | grep -qx "$DOCKER_CONTAINER_NAME"; then
-            print_error "MongoDB container is NOT running. Check: sudo docker logs $DOCKER_CONTAINER_NAME"
-            exit 1
-        fi
-        print_info "MongoDB container is running."
-    fi
+    print_info "MongoDB container started (port 27017 published on 127.0.0.1 only)."
 }
 
 # --- كتابة ملف config يوثق تفاصيل التثبيت مع توليد سكربت التصفية ---
@@ -179,6 +201,7 @@ write_config() {
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
         INSTALL_METHOD="$INSTALL_METHOD" \
         BIND_IP="$BIND_IP" \
+        PORT="$PORT" \
         DOCKER_CONTAINER_NAME="$container_name" \
         CLEANUP_COMMAND="bash $cleanup_script"
 
@@ -219,21 +242,19 @@ add_ssh_quick_info() {
 trap 'rm -rf "$TEMP_CONFIG_DIR"' EXIT
 
 _handle_existing_config_file "$CONFIG_FILE"
-
 detect_previous_installation
-choose_install_method
-
 _download_github_path "$CONFIGS_REPO_URL" "mongodb" "$TEMP_CONFIG_DIR"
 
-print_info "Detected supported Ubuntu release: $UBUNTU_CODENAME"
+print_step "Choose installation method"
+print_info "Native = official apt repo (repo.mongodb.org). Docker = official 'mongo' image."
 
-if [ "$INSTALL_METHOD" = "native" ]; then
-    install_native
-else
+if _confirm "Install MongoDB inside Docker instead of the native installation? (y/n): "; then
     install_in_docker
+else
+    install_native
 fi
 
-verify_installation
+
 write_config
 add_ssh_quick_info
 

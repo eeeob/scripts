@@ -167,28 +167,105 @@ _prompt_paste_file() {
     nano "$target_file" </dev/tty
 }
 
+_package_installed() {
+    dpkg -s "$1" >/dev/null 2>&1 || command -v "$1" >/dev/null 2>&1
+}
+
+_service_exists() {
+    local service="$1"
+    local check_active="${2:-false}"
+
+    if ! systemctl list-unit-files --type=service | grep -q "${service}.service"; then
+        return 1
+    fi
+
+    if [[ "$check_active" == "true" ]]; then
+        if ! systemctl is-active --quiet "$service"; then
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+_destroy_service() {
+    local service_name="$1"
+    local service_file="${2:-/etc/systemd/system/${service_name}.service}"
+
+    sudo systemctl stop "${service_name}.service" >/dev/null 2>&1 || true
+    sudo systemctl disable "${service_name}.service" >/dev/null 2>&1 || true
+
+    sudo rm -f "$service_file"
+
+    sudo systemctl reset-failed "${service_name}.service" >/dev/null 2>&1 || true
+    sudo systemctl daemon-reload
+}
+
+_wait_for_service() {
+    local service_name="$1"
+    local timeout="${2:-30}"
+
+    if ! _service_exists "$service_name"; then
+        print_error "Service '${service_name}.service' does not exist."
+        return 1
+    fi
+
+    local max_attempts=$((timeout * 5))
+    local attempt=0
+
+    while ! systemctl is-active --quiet "$service_name"; do
+        if (( attempt >= max_attempts )); then
+            print_error "Timed out waiting for '${service_name}.service' to become active."
+            return 1
+        fi
+
+        sleep 0.20
+        ((attempt++)) || true
+    done
+}
+
 _install_dependencies() {
     if [ "$#" -eq 0 ]; then
         print_error "No dependencies specified to install."
         return 1
     fi
 
-    print_step "Update system and install dependencies"
     sudo apt-get update -y
     sudo apt-get install -y "$@"
 }
 
+# تثبت الحزم الممررة فقط إن لم تكن مثبتة مسبقاً (بدون apt update إذا كانت كلها موجودة)
+# التحقق يتم بطريقتين: dpkg -s للحزمة، أو command -v إذا كان الاسم أمراً متاحاً
+# (يغطي حالة أداة مثبتة من خارج apt مثل git من المصدر)
+# الاستخدام: _ensure_packages <pkg1> [pkg2] ...
+_ensure_packages() {
+    if [ "$#" -eq 0 ]; then
+        print_error "No packages specified to ensure."
+        return 1
+    fi
+
+    local -a missing_packages=()
+    local pkg
+
+    for pkg in "$@"; do
+        _package_installed "$pkg" || missing_packages+=("$pkg")
+    done
+
+    [ ${#missing_packages[@]} -eq 0 ] && return 0
+
+    _install_dependencies "${missing_packages[@]}"
+}
+
 _install_docker() {
-    print_step "Install Docker"
-
-    if command -v docker >/dev/null 2>&1; then
-        print_info "Docker is already installed."
-    else
-        print_info "Installing Docker from official repository..."
-
-        _install_dependencies curl ca-certificates
+    
+    if ! _package_installed docker; then
+        print_step "Install Docker"
+        
+        _ensure_packages curl ca-certificates
 
         sudo install -m 0755 -d /etc/apt/keyrings
+
+        print_info "Installing Docker from official repository..."
 
         sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
         sudo chmod a+r /etc/apt/keyrings/docker.asc
@@ -205,8 +282,6 @@ EOF
         _install_dependencies docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
     fi
 
-    print_info "Checking Docker service status..."
-
     if ! sudo systemctl is-active --quiet docker; then
         print_warning "Docker service is not running. Starting it..."
         sudo systemctl start docker
@@ -215,17 +290,15 @@ EOF
     if ! sudo systemctl is-enabled --quiet docker; then
         print_warning "Docker service is not enabled. Enabling it..."
         sudo systemctl enable docker >/dev/null 2>&1
-    else
-        print_info "Docker service already enabled."
     fi
-
-    print_info "Docker service is running."
 
     if ! groups "$USER" | grep -q docker; then
         print_info "Adding user to docker group..."
         sudo usermod -aG docker "$USER"
-    else
-        print_info "User already in docker group."
+    fi
+
+    if sudo docker info >/dev/null 2>&1; then
+        return 0
     fi
 
     print_info "Waiting for Docker daemon to become ready..."
@@ -249,6 +322,7 @@ _clone_or_update_project() {
     local branch="${3:-main}"
 
     print_step "Clone or update project"
+    _ensure_packages git
 
     if [ -d "$project_dir/.git" ]; then
         print_info "Project already exists. Pulling latest changes..."
@@ -284,7 +358,8 @@ _render_template_file() {
 
     sudo mkdir -p "$(dirname "$output_file")"
 
-    command -v envsubst >/dev/null 2>&1 || _install_dependencies gettext-base
+    # envsubst يأتي من حزمة gettext-base
+    _ensure_packages gettext-base
 
     env "${env_assignments[@]}" envsubst "$vars_list" \
         < "$template_file" \
@@ -301,13 +376,9 @@ _create_systemd_service() {
 
     local service_file="/etc/systemd/system/${service_name}.service"
 
-    if systemctl list-unit-files | grep -q "${service_name}.service" || [ -f "$service_file" ]; then
-        print_info "Existing service '${service_name}' detected. Stopping and removing it first..."
-
-        sudo systemctl stop "${service_name}.service" >/dev/null 2>&1 || true
-        sudo systemctl disable "${service_name}.service" >/dev/null 2>&1 || true
-        sudo rm -f "$service_file"
-        sudo systemctl daemon-reload
+    if _service_exists "$service_name" || [ -f "$service_file" ]; then
+        print_info "Existing service '${service_name}' detected. Destroy it first..."
+        _destroy_service "$service_name" "$service_file"
         print_info "Old service successfully cleaned up."
     fi
 
@@ -317,6 +388,8 @@ _create_systemd_service() {
 
     sudo systemctl daemon-reload
     sudo systemctl enable "${service_name}.service" >/dev/null 2>&1
+
+    
     print_info "✅ Systemd service ${service_name}.service successfully created and enabled."
     print_info "for show logs run   sudo journalctl -u $service_name -e"
 }
@@ -325,10 +398,7 @@ _ensure_git_compatible() {
     local min_version="${1:-2.25.0}"
     local current_version
 
-    if ! command -v git >/dev/null 2>&1; then
-        print_warning "Git is not installed. Installing it..."
-        _install_dependencies git
-    fi
+    _ensure_packages git
 
     current_version=$(git --version | grep -oP '\d+\.\d+\.\d+')
 
@@ -459,7 +529,7 @@ _allow_port_through_firewall() {
     local port="$1"
     local source_subnet="${2:-}"
 
-    command -v ufw >/dev/null 2>&1 || return 0
+    _package_installed ufw || return 0
 
     if ! sudo ufw status 2>/dev/null | grep -q "Status: active"; then
         return 0
@@ -474,35 +544,140 @@ _allow_port_through_firewall() {
     fi
 }
 
+# تنشئ أو تحدّث سجل DNS من نوع A في Cloudflare ليطابق الآي بي العام الحالي للسيرفر
+# الاستخدام: _update_cloudflare_dns [api_token] [zone_id] [domain]
+# القيم التلقائية من المتغيرات العامة: CLOUDFLARE_API_TOKEN / CLOUDFLARE_ZONE_ID / CLOUDFLARE_DOMAIN
+_update_cloudflare_dns() {
+    local api_token="${1:-${CLOUDFLARE_API_TOKEN:-}}"
+    local zone_id="${2:-${CLOUDFLARE_ZONE_ID:-}}"
+    local domain="${3:-${CLOUDFLARE_DOMAIN:-}}"
+
+    if [ -z "$api_token" ] || [ -z "$zone_id" ] || [ -z "$domain" ]; then
+        print_error "_update_cloudflare_dns: api_token, zone_id and domain are required (args or CLOUDFLARE_* globals)."
+        return 1
+    fi
+
+    _ensure_packages curl
+
+    print_info "Fetching current server public IP..."
+    local current_ip
+    current_ip=$(curl -s --max-time 10 https://api.ipify.org || echo "")
+
+    if [ -z "$current_ip" ]; then
+        print_error "Failed to fetch public IP from api.ipify.org."
+        return 1
+    fi
+    print_info "Current server IP: $current_ip"
+
+    local api_base="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records"
+
+    print_info "Fetching current DNS record for $domain from Cloudflare..."
+    local record_info
+    record_info=$(curl -s -X GET "${api_base}?name=${domain}&type=A" \
+        -H "Authorization: Bearer ${api_token}" \
+        -H "Content-Type: application/json")
+
+    if [[ "$record_info" == *'"success":false'* ]]; then
+        print_error "Cloudflare API returned an error. Check your token and zone id."
+        echo "$record_info"
+        return 1
+    fi
+
+    # استخدام sed الآمن بدلاً من grep المستهلك للمدخلات
+    local record_id cloudflare_ip
+    record_id=$(echo "$record_info" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -n1)
+    cloudflare_ip=$(echo "$record_info" | sed -n 's/.*"content":"\([^"]*\)".*/\1/p' | head -n1)
+
+    local payload
+    payload="{\"type\":\"A\",\"name\":\"${domain}\",\"content\":\"${current_ip}\",\"ttl\":120,\"proxied\":true}"
+
+    local response
+    if [ -z "$record_id" ]; then
+        print_warning "DNS record for $domain not found. Creating a new one..."
+        response=$(curl -s -X POST "$api_base" \
+            -H "Authorization: Bearer ${api_token}" \
+            -H "Content-Type: application/json" \
+            --data "$payload")
+    elif [ "$current_ip" = "$cloudflare_ip" ]; then
+        print_info "IP has not changed ($current_ip). Cloudflare is already up to date."
+        return 0
+    else
+        print_info "IP changed from $cloudflare_ip to $current_ip. Updating Cloudflare..."
+        response=$(curl -s -X PUT "${api_base}/${record_id}" \
+            -H "Authorization: Bearer ${api_token}" \
+            -H "Content-Type: application/json" \
+            --data "$payload")
+    fi
+
+    if [[ "$response" == *'"success":true'* ]]; then
+        print_info "Cloudflare DNS record for $domain is now set to $current_ip."
+        return 0
+    fi
+
+    print_error "Failed to apply the Cloudflare DNS change."
+    echo "$response"
+    return 1
+}
+
+_docker_network_exists() {
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
+
+    if [ -z "$network_name" ]; then
+        print_error "_docker_network_exists: no network name provided and DOCKER_NETWORK_NAME is not set."
+        return 1
+    fi
+
+    _package_installed docker || return 1
+
+    sudo docker network inspect "$network_name" >/dev/null 2>&1
+}
+
 # تطبع subnet شبكة Docker المحددة
 # الاسم التلقائي: من المتغير العام DOCKER_NETWORK_NAME أو bridge (شبكة docker0)
 _get_docker_network_subnet() {
-    local network_name="${1:-${DOCKER_NETWORK_NAME:-bridge}}"
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
+
+    if [ -z "$network_name" ]; then
+        print_error "_get_docker_network_subnet: no network name provided and DOCKER_NETWORK_NAME is not set."
+        return 1
+    fi
+
+    _package_installed docker || return 1
 
     sudo docker network inspect --format '{{(index .IPAM.Config 0).Subnet}}' "$network_name" 2>/dev/null
 }
 
-_docker_network_exists() {
-    sudo docker network inspect "$1" >/dev/null 2>&1
-}
 
-# تنشئ شبكة Docker إذا لم تكن موجودة مسبقاً، مع إمكانية تحديد نطاق IP
-# الاستخدام: _create_docker_network [network_name] [ip_range]
-# القيم التلقائية: من المتغيرات العالمية DOCKER_NETWORK_NAME و DOCKER_NETWORK_SUBNET
-# وإذا لم تكن معرفة يتم استخدام main_network و 172.20.0.0/16
 _create_docker_network() {
-    local network_name="${1:-${DOCKER_NETWORK_NAME:-main_network}}"
-    local ip_range="${2:-${DOCKER_NETWORK_SUBNET:-172.20.0.0/16}}"
+    local network_name="${1:-${DOCKER_NETWORK_NAME:-}}"
+    local network_subnet="${2:-${DOCKER_NETWORK_SUBNET:-}}"
+
+    if [ -z "$network_name" ]; then
+        print_error "_create_docker_network: no network name provided and DOCKER_NETWORK_NAME is not set."
+        exit 1
+    fi
+
+    _install_docker
 
     if _docker_network_exists "$network_name"; then
+        if [ -n "$network_subnet" ]; then
+            local existing_subnet
+            existing_subnet=$(_get_docker_network_subnet "$network_name")
+
+            if [ -n "$existing_subnet" ] && [ "$existing_subnet" != "$network_subnet" ]; then
+                print_error "Docker network '$network_name' already exists with subnet '$existing_subnet', which does not match the requested subnet '$network_subnet'."
+                exit 1
+            fi
+        fi
+
         print_info "Docker network '$network_name' already exists. Skipping creation."
         return 0
     fi
 
     print_info "Creating Docker network '$network_name'..."
 
-    if [ -n "$ip_range" ]; then
-        sudo docker network create --subnet "$ip_range" "$network_name" >/dev/null
+    if [ -n "$network_subnet" ]; then
+        sudo docker network create --subnet "$network_subnet" "$network_name" >/dev/null
     else
         sudo docker network create "$network_name" >/dev/null
     fi
@@ -511,6 +686,7 @@ _create_docker_network() {
 }
 
 _container_exists() {
+    _package_installed docker || return 1
     sudo docker ps -a --format '{{.Names}}' | grep -qx "$1"
 }
 
@@ -637,8 +813,74 @@ _download_github_path() {
     print_info "Downloaded '$repo_path' to '$destination'."
 }
 
+# تنزّل سكربتاً من مستودع GitHub (خاص أو عام) وتشغّله عبر bash
+# تستخرج التوكن من ~/.git-credentials بعد تفعيل credential.helper store
+# الاستخدام: _run_github_script [github_user] [repo] [script_path] [branch]
+# القيم التلقائية من المتغيرات العامة: GITHUB_USER / GITHUB_REPO / GITHUB_SCRIPT_PATH / GITHUB_BRANCH
+_run_github_script() {
+    local github_user="${1:-${GITHUB_USER:-eeeob}}"
+    local repo="${2:-${GITHUB_REPO:-}}"
+    local script_path="${3:-${GITHUB_SCRIPT_PATH:-}}"
+    local branch="${4:-${GITHUB_BRANCH:-main}}"
 
+    if [ -z "$repo" ] || [ -z "$script_path" ]; then
+        print_error "_run_github_script: repo and script_path are required (args or GITHUB_* globals)."
+        return 1
+    fi
 
+    _ensure_packages git curl
 
+    print_info "Enabling Git credential storage..."
+    git config --global credential.helper store
+
+    print_info "Testing GitHub access to ${github_user}/${repo}..."
+    if ! git ls-remote "https://github.com/${github_user}/${repo}.git" >/dev/null; then
+        print_error "GitHub authentication failed for ${github_user}/${repo}."
+        return 1
+    fi
+
+    if [ ! -f "$HOME/.git-credentials" ]; then
+        print_error "Git credentials not found at ~/.git-credentials."
+        return 1
+    fi
+
+    local token
+    token=$(grep "github.com" "$HOME/.git-credentials" | tail -n1 | sed -E 's#https://[^:]+:([^@]+)@.*#\1#')
+
+    if [ -z "$token" ]; then
+        print_error "Could not extract GitHub token from ~/.git-credentials."
+        return 1
+    fi
+
+    print_info "Downloading and running '${script_path}' from ${github_user}/${repo} (${branch})..."
+    curl -fsSL \
+        -H "Authorization: token ${token}" \
+        -H "Accept: application/vnd.github.raw" \
+        "https://api.github.com/repos/${github_user}/${repo}/contents/${script_path}?ref=${branch}" \
+        | bash
+}
+
+_wait_for_container() {
+    local container="$1"
+    local timeout="${2:-30}"
+    
+    if ! _container_exists "$container"; then
+        print_error "Container '$container' does not exist."
+        return 1
+    fi
+
+    local max_attempts=$((timeout * 5))
+    local attempt=0
+
+    while [[ "$(sudo docker inspect -f '{{.State.Running}}' "$container")" != "true" ]]; do
+        if (( attempt >= max_attempts )); then
+            print_error "Timed out waiting for container '$container' to start."
+            return 1
+        fi
+
+        sleep 0.20
+        ((attempt++)) || true
+    done
+}
 
 

@@ -17,16 +17,20 @@ TEMP_CONFIG_DIR="/root/.temp_configs/ufw"
 CONFIG_FILE="/root/.configs/ufw_setup.conf"
 
 CONFIGS_REPO_URL="https://github.com/eeeob/configs.git"
-
-SSH_PORT="22"
 OLD_RULES_RESET="no"
+
+SSH_PORT=$(_detect_ssh_port)
 
 # التعرف على الأعلام المشتركة (-y موافقة / -n رفض تلقائي) مع إعادة تعيين باقي args للسكربت
 eval "$(_parse_common_flags --reset "$@")"
 
+print_info "Detected SSH port: $SSH_PORT"
+
 # --- التحقق من وجود قواعد UFW قديمة وتخيير المستخدم بإلغائها ---
 check_old_rules() {
     print_step "Checking existing UFW rules"
+
+    _package_installed ufw || return 0
 
     local old_rules
     old_rules=$(sudo ufw status numbered | grep -E '^\[' || true)
@@ -51,7 +55,6 @@ check_old_rules() {
     fi
 }
 
-# --- فحص الخدمات المستمعة التي ستتأثر بتفعيل الجدار الناري ---
 check_affected_services() {
     print_step "Checking services that may be affected"
 
@@ -75,14 +78,22 @@ check_affected_services() {
     fi
 }
 
-# --- تفعيل UFW مع السماح لـ SSH ---
 enable_ufw() {
     print_step "Enabling UFW"
 
+    _ensure_packages ufw
+
     sudo ufw default deny incoming >/dev/null
     sudo ufw default allow outgoing >/dev/null
+
     sudo ufw allow OpenSSH >/dev/null
     print_info "Allowed SSH via the OpenSSH application profile."
+
+    # لو كان SSH على بورت مخصص (غير 22) فبروفايل OpenSSH لا يغطيه، فنفتح البورت الفعلي لتجنب قفل الوصول
+    if [ "$SSH_PORT" != "22" ]; then
+        sudo ufw allow "$SSH_PORT/tcp" >/dev/null
+        print_info "Also allowed the detected custom SSH port: $SSH_PORT/tcp."
+    fi
 
     sudo ufw --force enable
     print_info "UFW is now active."
@@ -107,8 +118,7 @@ write_config() {
 add_ssh_quick_info() {
     print_step "Adding quick usage info to the SSH login screen"
 
-    _add_motd_info "ufw" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
-        CONFIG_FILE="$CONFIG_FILE"
+    _add_motd_info "ufw" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" CONFIG_FILE="$CONFIG_FILE"
 
     print_info "Quick usage info will appear on the next SSH login."
 }
@@ -116,13 +126,7 @@ add_ssh_quick_info() {
 trap 'rm -rf "$TEMP_CONFIG_DIR"' EXIT
 
 _handle_existing_config_file "$CONFIG_FILE"
-
-_install_dependencies ufw
 _download_github_path "$CONFIGS_REPO_URL" "ufw" "$TEMP_CONFIG_DIR"
-
-# اكتشاف بورت SSH الفعلي عبر الدالة العامة في utils.sh
-SSH_PORT=$(_detect_ssh_port)
-print_info "Detected SSH port: $SSH_PORT"
 
 check_old_rules
 check_affected_services
