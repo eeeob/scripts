@@ -47,13 +47,8 @@ DOCKER_NETWORK_NAME="main_network"
 # التعرف على الأعلام المشتركة (-y موافقة / -n رفض تلقائي) مع إعادة تعيين باقي args للسكربت
 eval "$(_parse_common_flags --reset "$@")"
 
-# الأعلام الخاصة بالسكربت (-d للدومين)
-while getopts "d:" opt; do
-    case "${opt}" in
-        d) SERVER_NAME="${OPTARG}" ;;
-        *) echo "Usage: $0 [-y|-n] [-d domain]"; exit 1 ;;
-    esac
-done
+# العلم الخاص بالسكربت (-d للدومين) عبر دالة مساعدة من utils
+_parse_flag_value "d" SERVER_NAME "$@"
 
 # --- كشف تثبيت سابق موجود فعلياً لكن غير موثق في ملف config (حالة مخفية) ---
 # عند وجود تثبيت شغّال وموافقة المستخدم على المتابعة، تتم تصفيته بالكامل بالطرق الرسمية
@@ -277,12 +272,18 @@ write_config() {
 
     local cleanup_script="$CONFIG_DIR/cleanup.sh"
 
+    local docker_container_name=""
+    local docker_network_name=""
+
     # توليد سكربت التصفية الحقيقي المطابق لطريقة التثبيت الحالية
     if [ "$INSTALL_METHOD" = "native" ]; then
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_native.sh.template" "$cleanup_script" \
             LOCATIONS_DIR="$LOCATIONS_DIR" \
             CERTS_DIR="$CERTS_DIR"
     else
+        docker_container_name="$DOCKER_CONTAINER_NAME"
+        docker_network_name="$DOCKER_NETWORK_NAME"
+
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_docker.sh.template" "$cleanup_script" \
             COMPOSE_FILE="$DOCKER_COMPOSE_FILE" \
             CONTAINER_NAME="$DOCKER_CONTAINER_NAME" \
@@ -297,7 +298,9 @@ write_config() {
         NGINX_VERSION="$NGINX_FULL_VERSION" \
         SERVER_NAME="$SERVER_NAME" \
         RESTART_COMMAND="$RESTART_COMMAND" \
-        CLEANUP_COMMAND="bash $cleanup_script"
+        CLEANUP_COMMAND="bash $cleanup_script" \
+        DOCKER_CONTAINER_NAME="$docker_container_name" \
+        DOCKER_NETWORK_NAME="$docker_network_name"
 
     print_info "Config saved to $CONFIG_FILE"
 }

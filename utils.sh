@@ -71,6 +71,22 @@ _parse_common_flags() {
     fi
 }
 
+# تستخرج قيمة علم بحرف واحد يأخذ قيمة (مثل: -d example.com) وتسندها لمتغير
+# تتجاهل بقية الأعلام بدل الفشل، لتتعايش مع أعلام أخرى مررت للسكربت (مثل -y/-n)
+# الاستخدام: _parse_flag_value "d" SERVER_NAME "$@"
+_parse_flag_value() {
+    local flag="$1"
+    local out_var_name="$2"
+    shift 2
+
+    # OPTIND محلي حتى تعمل الدالة بأمان عند استدعائها أكثر من مرة
+    # النقطتان في بداية optstring تجعل getopts صامتاً فلا يطبع أخطاء الأعلام المجهولة
+    local opt OPTIND=1
+    while getopts ":${flag}:" opt; do
+        [ "$opt" = "$flag" ] && printf -v "$out_var_name" '%s' "$OPTARG"
+    done
+}
+
 _confirm() {
     local prompt_text="$1"
 
