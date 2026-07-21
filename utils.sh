@@ -5,6 +5,10 @@
 # مقسّمة إلى أقسام حسب الخدمة/الوظيفة
 # ==============================================================================
 
+# لقطة بأسماء كل الدوال المعرّفة قبل تحميل هذا الملف (تُستخدم في نهاية الملف
+# لاستخراج أسماء دوال utils.sh فقط عبر المقارنة، دون قائمة ثابتة يدوية)
+_UTILS_PRELOAD_FUNCS=$(declare -F | awk '{print $3}')
+
 
 # ==============================================================================
 # Output helpers - دوال الطباعة
@@ -996,4 +1000,67 @@ _update_cloudflare_dns() {
     print_error "Failed to apply the Cloudflare DNS change."
     echo "$response"
     return 1
+}
+
+
+
+
+
+
+_UTILS_FUNCTIONS=($(comm -13 <(printf '%s\n' "$_UTILS_PRELOAD_FUNCS" | sort -u) <(declare -F | awk '{print $3}' | sort -u)))
+unset _UTILS_PRELOAD_FUNCS
+
+_run_utils_menu() {
+    if [ ${#_UTILS_FUNCTIONS[@]} -eq 0 ]; then
+        print_error "No functions were captured from utils.sh."
+        return 1
+    fi
+
+    trap 'echo; print_info "Exiting menu (Ctrl+C)."; trap - INT; return 0' INT
+
+    while true; do
+        echo
+        print_step "utils.sh - Interactive function menu"
+
+        local i
+        for i in "${!_UTILS_FUNCTIONS[@]}"; do
+            printf "  %2d) %s\n" "$((i + 1))" "${_UTILS_FUNCTIONS[$i]}"
+        done
+        printf "  %2d) Exit\n" 0
+        echo
+
+        local choice
+        read -p "Select a function number to run (0 to exit): " choice </dev/tty
+
+        if [ "$choice" = "0" ]; then
+            print_info "Exiting menu."
+            break
+        fi
+
+        if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#_UTILS_FUNCTIONS[@]}" ]; then
+            print_error "Invalid selection: $choice"
+            continue
+        fi
+
+        local selected="${_UTILS_FUNCTIONS[$((choice - 1))]}"
+
+        local args_line
+        read -p "Arguments to pass to '$selected' (space-separated, empty for none): " args_line </dev/tty
+
+        local -a call_args=()
+        [ -n "$args_line" ] && read -r -a call_args <<< "$args_line"
+
+        print_step "Running: $selected ${call_args[*]}"
+        "$selected" "${call_args[@]}"
+        local exit_code=$?
+
+        echo
+        if [ $exit_code -eq 0 ]; then
+            print_info "'$selected' finished successfully."
+        else
+            print_warning "'$selected' exited with code $exit_code."
+        fi
+    done
+
+    trap - INT
 }
