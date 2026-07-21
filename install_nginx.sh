@@ -351,36 +351,36 @@ run_installation() {
 write_config() {
     print_step "Writing config file"
 
-    local cleanup_script="$CONFIG_DIR/cleanup.sh"
+    local restart_command docker_container_name="" docker_network_name="" cleanup_script="$CONFIG_DIR/cleanup.sh"
 
-    local docker_container_name=""
-    local docker_network_name=""
-
-    # توليد سكربت التصفية الحقيقي المطابق لطريقة التثبيت الحالية
     if [ "$INSTALL_METHOD" = "native" ]; then
-        
+        restart_command="sudo systemctl restart nginx"
+
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_native.sh.template" "$cleanup_script" \
+            CONFIG_DIR="$CONFIG_DIR" \
+            NGINX_CONFIG_DIR="$NGINX_CONFIG_DIR" \
             LOCATIONS_DIR="$LOCATIONS_DIR" \
             CERTS_DIR="$CERTS_DIR"
     else
+        restart_command="sudo docker compose -f $DOCKER_COMPOSE_FILE restart"
         docker_container_name="$DOCKER_CONTAINER_NAME"
         docker_network_name="$DOCKER_NETWORK_NAME"
-        
 
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_docker.sh.template" "$cleanup_script" \
             COMPOSE_FILE="$DOCKER_COMPOSE_FILE" \
             CONTAINER_NAME="$DOCKER_CONTAINER_NAME" \
+            CONFIG_DIR="$CONFIG_DIR" \
+            NGINX_CONFIG_DIR="$NGINX_CONFIG_DIR" \
             LOCATIONS_DIR="$LOCATIONS_DIR" \
             CERTS_DIR="$CERTS_DIR"
     fi
     sudo chmod +x "$cleanup_script"
 
     _render_template_file "$TEMP_CONFIG_DIR/nginx_install.conf.template" "$CONFIG_FILE" \
+        INSTALL_METHOD SERVER_NAME CLOUDFLARE CLIENT_MAX_BODY_SIZE \
+        LOCATIONS_DIR CERTS_DIR \
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
-        INSTALL_METHOD="$INSTALL_METHOD" \
-        SERVER_NAME="$SERVER_NAME" \
-        CLOUDFLARE="$CLOUDFLARE" \
-        RESTART_COMMAND="$RESTART_COMMAND" \
+        RESTART_COMMAND="$restart_command" \
         CLEANUP_COMMAND="bash $cleanup_script" \
         DOCKER_CONTAINER_NAME="$docker_container_name" \
         DOCKER_NETWORK_NAME="$docker_network_name"
@@ -392,14 +392,28 @@ write_config() {
 add_ssh_quick_info() {
     print_step "Adding quick usage info to the SSH login screen"
 
-    local test_command="sudo nginx -t"
-    [ "$INSTALL_METHOD" = "docker" ] && test_command="sudo docker exec $DOCKER_CONTAINER_NAME nginx -t"
+    # كل الأوامر تُحسب محلياً حسب طريقة التثبيت (لا حاجة لمتغيرات عامة)
+    local restart_command test_command status_command logs_command
+
+    if [ "$INSTALL_METHOD" = "docker" ]; then
+        restart_command="sudo docker compose -f $DOCKER_COMPOSE_FILE restart"
+        test_command="sudo docker exec $DOCKER_CONTAINER_NAME nginx -t"
+        status_command="sudo docker ps --filter name=$DOCKER_CONTAINER_NAME"
+        logs_command="sudo docker logs -f $DOCKER_CONTAINER_NAME"
+    else
+        restart_command="sudo systemctl restart nginx"
+        test_command="sudo nginx -t"
+        status_command="sudo systemctl status nginx"
+        logs_command="sudo tail -f /var/log/nginx/access.log"
+    fi
 
     _add_motd_info "nginx" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
-        SERVER_NAME="$SERVER_NAME" \
+        SERVER_NAME LOCATIONS_DIR CONFIG_FILE \
+        RESTART_COMMAND="$restart_command" \
         TEST_COMMAND="$test_command" \
-        LOCATIONS_DIR="$LOCATIONS_DIR" \
-        CONFIG_FILE="$CONFIG_FILE"
+        STATUS_COMMAND="$status_command" \
+        LOGS_COMMAND="$logs_command" \
+        CLEANUP_COMMAND="bash $CONFIG_DIR/cleanup.sh"
 
     print_info "Quick usage info will appear on the next SSH login."
 }
