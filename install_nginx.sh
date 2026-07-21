@@ -361,8 +361,8 @@ install_in_docker() {
 
     # مسار native يفتح المنافذ عبر UFW صراحة، ونطبّق نفس الشيء هنا لأن نشر Docker
     # للمنافذ لا يعني تلقائياً أن UFW سيسمح بالوصول لها من خارج السيرفر
-    _allow_port_through_firewall 80
-    _allow_port_through_firewall 443
+    # _allow_port_through_firewall 80
+    # _allow_port_through_firewall 443
 
     print_info "Nginx container started on ports 80 and 443."
 }
