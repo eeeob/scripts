@@ -95,8 +95,12 @@ _parse_flag_value() {
     # opt يساوي أحد أعلامنا عند التطابق، أو ? لعلم مجهول، أو : لقيمة ناقصة
     local opt OPTIND=1
     while getopts "$optstring" opt; do
-        [[ "$opt" != "?" && "$opt" != ":" ]] && printf -v "$out_var_name" '%s' "$OPTARG"
+        if [[ "$opt" != "?" && "$opt" != ":" ]]; then
+            printf -v "$out_var_name" '%s' "$OPTARG"
+        fi
     done
+
+    return 0
 }
 
 # تبحث في وسائط السكربت عن أي وسيط يطابق إحدى القيم المسموح بها وتسنده لمتغير
@@ -125,10 +129,13 @@ _parse_choice_value() {
                 value="$entry"
             fi
 
-            [ "$normalized" = "$choice" ] && printf -v "$out_var_name" '%s' "$value"
-
+            if [ "$normalized" = "$choice" ]; then
+                printf -v "$out_var_name" '%s' "$value"
+            fi
         done
     done
+
+    return 0
 }
 
 _confirm() {
