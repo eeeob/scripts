@@ -111,6 +111,21 @@ install() {
 }
 
 
+
+_ensure_ufw_not_blocking_mongo() {
+    _package_installed ufw || return 0
+    sudo ufw status 2>/dev/null | grep -q "Status: active" || return 0
+
+    if sudo ufw status | grep -E "\b${PORT}\b" | grep -qiE '\b(DENY|REJECT)\b'; then
+        print_warning "Firewall has a blocking rule for port $PORT. Removing it so MongoDB controls access itself via bindIp..."
+        sudo ufw delete deny "$PORT/tcp" >/dev/null 2>&1 || true
+        sudo ufw delete reject "$PORT/tcp" >/dev/null 2>&1 || true
+        sudo ufw delete deny "$PORT" >/dev/null 2>&1 || true
+        sudo ufw delete reject "$PORT" >/dev/null 2>&1 || true
+        print_info "Firewall blocking rule(s) for port $PORT removed."
+    fi
+}
+
 install_native() {
     if _package_installed mongodb-org || _package_installed mongod || _service_exists mongod; then
         print_error "A native MongoDB installation still exists. Aborting to avoid a broken setup."
@@ -136,6 +151,8 @@ install_native() {
     sudo systemctl daemon-reload
     sudo systemctl enable mongod >/dev/null 2>&1
     sudo systemctl restart mongod
+
+    _ensure_ufw_not_blocking_mongo
 
     BIND_IP="127.0.0.1"
 
