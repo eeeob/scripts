@@ -72,18 +72,58 @@ _parse_common_flags() {
 }
 
 # تستخرج قيمة علم بحرف واحد يأخذ قيمة (مثل: -d example.com) وتسندها لمتغير
+# يمكن تمرير أكثر من علم لنفس المتغير مفصولة بفراغ (مثل "d h")، وأي علم يطابق يعيّن القيمة (الأخير يفوز)
 # تتجاهل بقية الأعلام بدل الفشل، لتتعايش مع أعلام أخرى مررت للسكربت (مثل -y/-n)
-# الاستخدام: _parse_flag_value "d" SERVER_NAME "$@"
+# الاستخدام: _parse_flag_value "d" SERVER_NAME "$@"   أو   _parse_flag_value "d h" SERVER_NAME "$@"
 _parse_flag_value() {
-    local flag="$1"
+    local flags="$1"
     local out_var_name="$2"
     shift 2
 
+    # نبني optstring بحيث كل علم يأخذ قيمة: مثلاً "d h" => ":d:h:"
+    local optstring=":" flag
+    for flag in $flags; do
+        optstring+="${flag}:"
+    done
+
     # OPTIND محلي حتى تعمل الدالة بأمان عند استدعائها أكثر من مرة
     # النقطتان في بداية optstring تجعل getopts صامتاً فلا يطبع أخطاء الأعلام المجهولة
+    # opt يساوي أحد أعلامنا عند التطابق، أو ? لعلم مجهول، أو : لقيمة ناقصة
     local opt OPTIND=1
-    while getopts ":${flag}:" opt; do
-        [ "$opt" = "$flag" ] && printf -v "$out_var_name" '%s' "$OPTARG"
+    while getopts "$optstring" opt; do
+        [[ "$opt" != "?" && "$opt" != ":" ]] && printf -v "$out_var_name" '%s' "$OPTARG"
+    done
+}
+
+# تبحث في وسائط السكربت عن أي وسيط يطابق إحدى القيم المسموح بها وتسنده لمتغير
+# القيم المسموح بها تمرّر كسلسلة مفصولة بفراغ (مثل "native docker")، وأي وسيط يطابق يعيّن القيمة (الأخير يفوز)
+# المطابقة حساسة لحالة الأحرف (تماماً كما كتبها المستخدم)، وتقبل الوسيط بأي بادئة: docker أو -docker أو --docker
+# لا تلمس المتغير إذا لم يُمرّر أي وسيط مطابق، فتبقى قيمته الافتراضية كما هي
+# تتجاهل بقية الوسائط بدل الفشل، لتتعايش مع أعلام أخرى مررت للسكربت (مثل -y/-n)
+# الاستخدام: _parse_choice_value "native docker" INSTALL_METHOD "$@"
+_parse_choice_value() {
+    local choices="$1"
+    local out_var_name="$2"
+    shift 2
+
+    local arg normalized entry choice value
+
+    for arg in "$@"; do
+        normalized="${arg#--}"
+        normalized="${normalized#-}"
+
+        for entry in $choices; do
+            if [[ "$entry" == *=* ]]; then
+                choice="${entry%%=*}"
+                value="${entry#*=}"
+            else
+                choice="$entry"
+                value="$entry"
+            fi
+
+            [ "$normalized" = "$choice" ] && printf -v "$out_var_name" '%s' "$value"
+
+        done
     done
 }
 
@@ -142,6 +182,7 @@ _prompt_required() {
 _prompt_paste_file() {
     local prompt_text="$1"
     local target_file="$2"
+    local remove_existing="${3:-false}"
 
     echo
     echo "================================================================="
@@ -152,6 +193,13 @@ _prompt_paste_file() {
     echo
 
     read -p "Press ENTER to open the file..." </dev/tty
+
+    sudo mkdir -p "$(dirname "$target_file")"
+
+    if [[ "$remove_existing" == "true" ]]; then
+        sudo rm -f "$target_file"
+    fi
+
     nano "$target_file" </dev/tty
 }
 

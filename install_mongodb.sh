@@ -40,6 +40,7 @@ DOCKER_NETWORK_NAME="main_network"
 
 # التعرف على الأعلام المشتركة (-y موافقة / -n رفض تلقائي) مع إعادة تعيين باقي args للسكربت
 eval "$(_parse_common_flags --reset "$@")"
+_parse_choice_value "native docker" INSTALL_METHOD "$@"
 
 # --- كشف تثبيت سابق موجود فعلياً لكن غير موثق في ملف config (حالة مخفية) ---
 # عند وجود تثبيت شغّال وموافقة المستخدم على المتابعة، تتم تصفيته بالكامل بالطرق الرسمية
@@ -89,6 +90,26 @@ detect_previous_installation() {
     print_info "Existing MongoDB installation removed. Continuing with a fresh setup..."
 }
 
+install() {
+    if [[ -z "$INSTALL_METHOD" ]]; then
+        print_step "Choose installation method"
+        print_info "Native = official apt repo (repo.mongodb.org). Docker = official 'mongo' image."
+
+        if _confirm "Install MongoDB inside Docker instead of the native installation? (y/n): "; then
+            INSTALL_METHOD="docker"
+        else
+            INSTALL_METHOD="native"
+        fi
+    fi
+
+    if [[ "$INSTALL_METHOD" == "docker" ]]; then
+        install_in_docker
+    else
+        install_native
+    fi
+    
+}
+
 
 install_native() {
     if _package_installed mongodb-org || _package_installed mongod || _service_exists mongod; then
@@ -117,7 +138,6 @@ install_native() {
     sudo systemctl restart mongod
 
     BIND_IP="127.0.0.1"
-    INSTALL_METHOD="native"
 
     if ! _confirm "Make MongoDB accessible to Docker containers via docker0 (172.17.0.1)? (y/n): "; then
         print_info "Skipping Docker access configuration."
@@ -169,9 +189,7 @@ install_in_docker() {
 
     print_info "Compose file saved to $DOCKER_COMPOSE_FILE"
     sudo docker compose -f "$DOCKER_COMPOSE_FILE" up -d
-    _wait_for_container "$DOCKER_CONTAINER_NAME" 10
-
-    INSTALL_METHOD="docker"
+    _wait_for_container "$DOCKER_CONTAINER_NAME" 30
 
     print_info "MongoDB container started (port 27017 published on 127.0.0.1 only)."
 }
@@ -250,16 +268,7 @@ _handle_existing_config_file "$CONFIG_FILE"
 detect_previous_installation
 _download_github_path "$CONFIGS_REPO_URL" "mongodb" "$TEMP_CONFIG_DIR"
 
-print_step "Choose installation method"
-print_info "Native = official apt repo (repo.mongodb.org). Docker = official 'mongo' image."
-
-if _confirm "Install MongoDB inside Docker instead of the native installation? (y/n): "; then
-    install_in_docker
-else
-    install_native
-fi
-
-
+install
 write_config
 add_ssh_quick_info
 
