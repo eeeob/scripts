@@ -42,6 +42,32 @@ DOCKER_NETWORK_NAME="main_network"
 eval "$(_parse_common_flags --reset "$@")"
 _parse_choice_value "native docker" INSTALL_METHOD "$@"
 
+# --- تحذير من عدم توافق معروف بين MongoDB 8.0.x وأنوية Linux الحديثة (6.19 فما فوق) ---
+# خلل موثّق رسمياً من MongoDB (تصادم TCMalloc/rseq يمنع mongod من الإقلاع)، مُصلَح في نسخ 8.0.x لاحقة
+# لكن حد التوافق الآمن يختلف بين نسخة وأخرى، لذا نحذّر بدل السماح بحلقة أعطال صامتة
+# المرجع: https://jira.mongodb.org/browse/SERVER-121912
+check_kernel_compatibility() {
+    local kernel_version major minor
+
+    kernel_version=$(uname -r)
+    major=$(echo "$kernel_version" | grep -oE '^[0-9]+')
+    minor=$(echo "$kernel_version" | grep -oE '^[0-9]+\.[0-9]+' | cut -d. -f2)
+
+    [ -z "$major" ] || [ -z "$minor" ] && return 0
+
+    if [ "$major" -gt 6 ] || { [ "$major" -eq 6 ] && [ "$minor" -ge 19 ]; }; then
+        print_warning "Detected kernel $kernel_version."
+        print_warning "MongoDB 8.0.x has a known startup crash on kernel 6.19+ (TCMalloc/rseq incompatibility)."
+        print_warning "See: https://jira.mongodb.org/browse/SERVER-121912"
+        print_warning "This is fixed in recent MongoDB 8.0.x patch builds (this script always installs/pulls the latest available patch), but if mongod still refuses to start, downgrading the kernel is MongoDB's official recommended workaround."
+
+        if ! _confirm "Continue installing MongoDB anyway? (y/n): "; then
+            print_info "Aborted by user. Nothing was changed."
+            exit 0
+        fi
+    fi
+}
+
 # --- كشف تثبيت سابق موجود فعلياً لكن غير موثق في ملف config (حالة مخفية) ---
 # عند وجود تثبيت شغّال وموافقة المستخدم على المتابعة، تتم تصفيته بالكامل بالطرق الرسمية
 detect_previous_installation() {
@@ -186,6 +212,12 @@ install_in_docker() {
         NETWORK_NAME="$DOCKER_NETWORK_NAME"
 
     print_info "Compose file saved to $DOCKER_COMPOSE_FILE"
+
+    # سحب الصورة صراحة قبل التشغيل لضمان أحدث تصحيح ضمن نفس خط الإصدار MONGO_VERSION
+    # (بدل الاعتماد على نسخة قديمة قد تكون مخبأة محلياً من قبل إصلاح SERVER-121912)
+    print_info "Pulling the latest mongo:${MONGO_VERSION} image..."
+    sudo docker pull "mongo:${MONGO_VERSION}"
+
     sudo docker compose -f "$DOCKER_COMPOSE_FILE" up -d
     _wait_for_container "$DOCKER_CONTAINER_NAME" 30
 
@@ -260,6 +292,7 @@ add_ssh_quick_info() {
 
 trap 'rm -rf "$TEMP_CONFIG_DIR"' EXIT
 
+check_kernel_compatibility
 _handle_existing_config_file "$CONFIG_FILE"
 detect_previous_installation
 _download_github_path "$CONFIGS_REPO_URL" "mongodb" "$TEMP_CONFIG_DIR"

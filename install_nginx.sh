@@ -359,11 +359,6 @@ install_in_docker() {
     sudo docker compose -f "$DOCKER_COMPOSE_FILE" up -d
     _wait_for_container "$DOCKER_CONTAINER_NAME" 30
 
-    # مسار native يفتح المنافذ عبر UFW صراحة، ونطبّق نفس الشيء هنا لأن نشر Docker
-    # للمنافذ لا يعني تلقائياً أن UFW سيسمح بالوصول لها من خارج السيرفر
-    # _allow_port_through_firewall 80
-    # _allow_port_through_firewall 443
-
     print_info "Nginx container started on ports 80 and 443."
 }
 
