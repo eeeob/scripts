@@ -108,10 +108,10 @@ detect_previous_installation() {
     if [ "$found_docker" = "yes" ]; then
         print_info "Cleaning up the Docker Nginx installation..."
         _remove_container "$DOCKER_CONTAINER_NAME"
-        rm -f /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/cloudflare.conf
+        sudo rm -f /etc/nginx/conf.d/default.conf /etc/nginx/conf.d/cloudflare.conf
     fi
 
-    rm -rf "${CONFIG_DIR}" "${NGINX_CONFIG_DIR}" "${LOCATIONS_DIR}" "${CERTS_DIR}"
+    sudo rm -rf "${CONFIG_DIR}" "${NGINX_CONFIG_DIR}" "${LOCATIONS_DIR}" "${CERTS_DIR}"
 
     print_info "Existing Nginx installation removed. Continuing with a fresh setup..."
 }
@@ -277,6 +277,30 @@ _deploy_nginx_config() {
 # Installation: Native - التثبيت المباشر من مستودع nginx.org
 # ==============================================================================
 
+# حزمة nginx.org الرسمية لا تشحن بروفايل ufw، وحزمة أوبنتو nginx-common تتعارض معها فلا يمكن
+# تثبيتها بجانبها؛ لذا ننزّل حزمة أوبنتو ونستخرج منها ملف بروفايل ufw فقط دون تثبيتها
+_install_nginx_ufw_profile() {
+    local profile="/etc/ufw/applications.d/nginx"
+    [ -f "$profile" ] && return 0
+
+    print_info "Downloading the Ubuntu 'nginx-common' package to obtain its ufw profile..."
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    if ( cd "$tmp_dir" && apt-get download nginx-common >/dev/null 2>&1 ); then
+        local deb
+        deb=$(ls "$tmp_dir"/nginx-common_*.deb 2>/dev/null | head -n1)
+        if [ -n "$deb" ]; then
+            sudo dpkg-deb -x "$deb" "$tmp_dir/extracted" >/dev/null 2>&1 || true
+            [ -f "$tmp_dir/extracted$profile" ] && sudo cp "$tmp_dir/extracted$profile" "$profile"
+        fi
+    fi
+
+    rm -rf "$tmp_dir"
+    [ -f "$profile" ]
+}
+
 install_native() {
     if _package_installed nginx || _service_exists nginx; then
         print_error "A native Nginx installation still exists. Aborting to avoid a broken setup."
@@ -285,16 +309,20 @@ install_native() {
 
     print_step "Installing Nginx (native, official nginx.org repo)"
 
-    _deploy_nginx_config
     _install_dependencies nginx
 
     if _package_installed ufw; then
-        sudo ufw allow 'Nginx Full'
+        if _install_nginx_ufw_profile; then
+            sudo ufw allow 'Nginx Full' >/dev/null 2>&1 || true
+            print_info "Allowed 'Nginx Full' (ports 80,443) through ufw."
+        else
+            print_warning "Nginx ufw profile unavailable; allowing ports 80/443 directly."
+            sudo ufw allow 80/tcp >/dev/null 2>&1 || true
+            sudo ufw allow 443/tcp >/dev/null 2>&1 || true
+        fi
     fi
 
-    
-    print_info "Testing Nginx configuration..."
-    sudo nginx -t
+    _deploy_nginx_config
 
     sudo systemctl enable nginx >/dev/null 2>&1
     sudo systemctl restart nginx

@@ -181,10 +181,8 @@ install_in_docker() {
     BIND_IP="127.0.0.1"
 
     _render_template_file "$TEMP_CONFIG_DIR/docker-compose.yml.template" "$DOCKER_COMPOSE_FILE" \
-        MONGO_VERSION="$MONGO_VERSION" \
+        MONGO_VERSION PORT BIND_IP \
         CONTAINER_NAME="$DOCKER_CONTAINER_NAME" \
-        PORT="$PORT" \
-        BIND_IP="$BIND_IP" \
         NETWORK_NAME="$DOCKER_NETWORK_NAME"
 
     print_info "Compose file saved to $DOCKER_COMPOSE_FILE"
@@ -219,10 +217,8 @@ write_config() {
     sudo chmod +x "$cleanup_script"
 
     _render_template_file "$TEMP_CONFIG_DIR/mongodb_install.conf.template" "$CONFIG_FILE" \
+        INSTALL_METHOD BIND_IP PORT \
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
-        INSTALL_METHOD="$INSTALL_METHOD" \
-        BIND_IP="$BIND_IP" \
-        PORT="$PORT" \
         CLEANUP_COMMAND="bash $cleanup_script" \
         DOCKER_CONTAINER_NAME="$docker_container_name" \
         DOCKER_NETWORK_NAME="$docker_network_name" 

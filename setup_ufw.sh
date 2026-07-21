@@ -108,9 +108,8 @@ write_config() {
     print_step "Writing config file"
 
     _render_template_file "$TEMP_CONFIG_DIR/ufw_setup.conf.template" "$CONFIG_FILE" \
+        SSH_PORT OLD_RULES_RESET \
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
-        SSH_PORT="$SSH_PORT" \
-        OLD_RULES_RESET="$OLD_RULES_RESET" \
         CLEANUP_COMMAND="ufw --force reset"
 
     print_info "Config saved to $CONFIG_FILE"

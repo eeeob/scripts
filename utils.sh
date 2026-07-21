@@ -394,7 +394,6 @@ _create_systemd_service() {
     local service_name="$1"
     local template_file="$2"
     shift 2
-    local -a template_vars=("$@")
 
     print_step "Creating Systemd Service: ${service_name}"
 
@@ -408,7 +407,7 @@ _create_systemd_service() {
 
     print_info "Configuring systemd service file at ${service_file}..."
 
-    _render_template_file "$template_file" "$service_file" "${template_vars[@]}"
+    _render_template_file "$template_file" "$service_file" "$@"
 
     sudo systemctl daemon-reload
     sudo systemctl enable "${service_name}.service" >/dev/null 2>&1
@@ -438,7 +437,9 @@ _render_template_file() {
             var_name="${arg%%=*}"
             env_assignments+=("$arg")
         else
+            # اسم مجرّد: تُقرأ قيمته من نطاق المستدعي (متغير عام) وتُمرَّر لبيئة envsubst
             var_name="$arg"
+            env_assignments+=("$var_name=${!var_name}")
         fi
         vars_list+="\${$var_name} "
     done
@@ -615,7 +616,7 @@ _download_github_path() {
     print_info "Fetching repository metadata (sparse checkout)..."
     if ! git clone --quiet --depth 1 --filter=blob:none --sparse --branch "$branch" "$repo_url" "$tmp_dir"; then
         print_error "Failed to clone repository '$repo_url' (branch: $branch)."
-        rm -rf "$tmp_dir"
+        sudo rm -rf "$tmp_dir"
         return 1
     fi
 
@@ -628,21 +629,21 @@ _download_github_path() {
 
     if [ ! -e "$source_path" ]; then
         print_error "Path '$repo_path' was not found in the repository."
-        rm -rf "$tmp_dir"
+        sudo rm -rf "$tmp_dir"
         return 1
     fi
 
     if [ -d "$source_path" ]; then
-        rm -rf "$destination"
-        mkdir -p "$destination"
+        sudo rm -rf "$destination"
+        sudo mkdir -p "$destination"
         cp -r "$source_path/." "$destination/"
     else
-        rm -f "$destination"
-        mkdir -p "$(dirname "$destination")"
+        sudo rm -f "$destination"
+        sudo mkdir -p "$(dirname "$destination")"
         cp "$source_path" "$destination"
     fi
 
-    rm -rf "$tmp_dir"
+    sudo rm -rf "$tmp_dir"
 
     print_info "Downloaded '$repo_path' to '$destination'."
 }
