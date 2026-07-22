@@ -473,9 +473,8 @@ _read_config_value() {
     sudo grep -E "^${key}=" "$config_file" 2>/dev/null | head -n 1 | cut -d'"' -f2
 }
 
-# تتحقق من وجود ملف config قديم لخدمة وتخيّر المستخدم: إعادة الضبط من الصفر أو الخروج
-# عند اختيار إعادة الضبط تنفذ أمر التصفية المسجل داخل الكونفج نفسه (CLEANUP_COMMAND)
-# وهو المسؤول عن إيقاف وحذف كل ما يخص الخدمة، ثم تحذف الكونفج ومجلد الخدمة
+# تتحقق من وجود ملف config قديم لخدمة وتخيّر المستخدم: تنفيذ أمر التصفية CLEANUP_COMMAND أو إيقاف السكربت
+# إذا لم يوجد CLEANUP_COMMAND في الكونفج يتم إيقاف السكربت مباشرة (لا يوجد وسيلة آمنة للتصفية)
 _handle_existing_config_file() {
     local config_file="$1"
 
@@ -487,19 +486,20 @@ _handle_existing_config_file() {
     sudo cat "$config_file"
     echo
 
-    if ! _confirm "Remove everything related to this service (including its data) and redo the setup from scratch? (y/n): "; then
+    local cleanup_command
+    cleanup_command=$(_read_config_value "$config_file" CLEANUP_COMMAND)
+
+    if [ -z "$cleanup_command" ]; then
+        print_error "No CLEANUP_COMMAND found in the config. Cannot safely clean up. Exiting."
+        exit 1
+    fi
+
+    if ! _confirm "Run the cleanup command to remove everything related to this service (including its data) and redo the setup from scratch? (y/n): "; then
         print_info "Keeping the existing setup. Exiting without changes."
         exit 0
     fi
 
-    local cleanup_command
-    cleanup_command=$(_read_config_value "$config_file" CLEANUP_COMMAND)
-
-    if [ -n "$cleanup_command" ]; then
-        sudo bash -c "$cleanup_command" || print_warning "Cleanup command finished with errors. Continuing anyway."
-    else
-        print_warning "No CLEANUP_COMMAND found in the config. Only the config file will be removed."
-    fi
+    sudo bash -c "$cleanup_command" || print_warning "Cleanup command finished with errors. Continuing anyway."
 
     print_info "Previous installation cleaned up. Continuing with a fresh setup..."
 }
