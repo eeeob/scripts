@@ -43,6 +43,7 @@ SERVER_NAME=""        # الدومين
 INSTALL_METHOD=""     # native | docker
 CLOUDFLARE=""         # yes | no
 FIREWALL_INFO=""
+STOP_UFW=""
 
 #docker
 DOCKER_COMPOSE_FILE="$CONFIG_DIR/docker-compose.yml"
@@ -317,11 +318,13 @@ install_native() {
             sudo ufw allow 'Nginx Full' >/dev/null 2>&1 || true
             print_info "Allowed 'Nginx Full' (ports 80,443) through ufw."
             FIREWALL_INFO="ufw: allowed 'Nginx Full' (ports 80,443/tcp)"
+            STOP_UFW="ufw delete allow 'Nginx Full'"
         else
             print_warning "Nginx ufw profile unavailable; allowing ports 80/443 directly."
             sudo ufw allow 80/tcp >/dev/null 2>&1 || true
             sudo ufw allow 443/tcp >/dev/null 2>&1 || true
             FIREWALL_INFO="ufw: allowed 80/tcp and 443/tcp directly"
+            STOP_UFW="ufw delete allow 80/tcp; ufw delete allow 443/tcp"
         fi
     fi
 
@@ -391,7 +394,8 @@ write_config() {
             CONFIG_DIR="$CONFIG_DIR" \
             NGINX_CONFIG_DIR="$NGINX_CONFIG_DIR" \
             LOCATIONS_DIR="$LOCATIONS_DIR" \
-            CERTS_DIR="$CERTS_DIR"
+            CERTS_DIR="$CERTS_DIR" \
+            STOP_UFW="$STOP_UFW"
     else
         restart_command="sudo docker compose -f $DOCKER_COMPOSE_FILE restart"
         docker_container_name="$DOCKER_CONTAINER_NAME"
