@@ -103,14 +103,19 @@ enable_ufw() {
     sudo ufw status verbose
 }
 
-# --- كتابة ملف config يوثق الإعدادات المطبقة ---
+# --- كتابة ملف config يوثق الإعدادات المطبقة مع توليد سكربت التصفية ---
 write_config() {
     print_step "Writing config file"
+
+    local cleanup_script="$CONFIG_DIR/cleanup.sh"
+
+    _render_template_file "$TEMP_CONFIG_DIR/cleanup.sh.template" "$cleanup_script" CONFIG_DIR
+    sudo chmod +x "$cleanup_script"
 
     _render_template_file "$TEMP_CONFIG_DIR/ufw_setup.conf.template" "$CONFIG_FILE" \
         SSH_PORT OLD_RULES_RESET \
         CONFIGURED_AT="$(date '+%Y-%m-%d %H:%M:%S')" \
-        CLEANUP_COMMAND="ufw --force reset"
+        CLEANUP_COMMAND="bash $cleanup_script"
 
     print_info "Config saved to $CONFIG_FILE"
 }
@@ -119,7 +124,8 @@ write_config() {
 add_ssh_quick_info() {
     print_step "Adding quick usage info to the SSH login screen"
 
-    _add_motd_info "ufw" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" CONFIG_FILE="$CONFIG_FILE"
+    _add_motd_info "ufw" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
+        CONFIG_FILE="$CONFIG_FILE" CLEANUP_COMMAND="bash $CONFIG_DIR/cleanup.sh"
 
     print_info "Quick usage info will appear on the next SSH login."
 }

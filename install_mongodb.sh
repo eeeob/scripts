@@ -90,6 +90,8 @@ detect_previous_installation() {
         _remove_container "$DOCKER_CONTAINER_NAME"
     fi
 
+    sudo rm -rf "${CONFIG_DIR}"
+
     print_info "Existing MongoDB installation removed. Continuing with a fresh setup..."
 }
 
@@ -215,7 +217,7 @@ write_config() {
 
     if [ "$INSTALL_METHOD" = "native" ]; then
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_native.sh.template" "$cleanup_script" \
-            STOP_UFW \
+            STOP_UFW CONFIG_DIR \
             APT_SOURCE_FILE="/etc/apt/sources.list.d/mongodb-org-${MONGO_VERSION}.list" \
             KEYRING_FILE="/usr/share/keyrings/mongodb-server-${MONGO_VERSION}.gpg"
     else
@@ -223,6 +225,7 @@ write_config() {
         docker_network_name="$DOCKER_NETWORK_NAME"
 
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_docker.sh.template" "$cleanup_script" \
+            CONFIG_DIR \
             COMPOSE_FILE="$DOCKER_COMPOSE_FILE" \
             CONTAINER_NAME="$DOCKER_CONTAINER_NAME"
     fi
