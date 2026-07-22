@@ -260,7 +260,7 @@ add_ssh_quick_info() {
         shell_command="sudo docker exec -it $DOCKER_CONTAINER_NAME mongosh"
     fi
 
-    cleanup_command="bash $CONFIG_DIR/cleanup.sh"
+    cleanup_command="sudo bash $CONFIG_DIR/cleanup.sh"
 
     _add_motd_info "mongodb" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
         RESTART_COMMAND="$restart_command" \

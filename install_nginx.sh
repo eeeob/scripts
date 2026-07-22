@@ -441,7 +441,7 @@ add_ssh_quick_info() {
         TEST_COMMAND="$test_command" \
         STATUS_COMMAND="$status_command" \
         LOGS_COMMAND="$logs_command" \
-        CLEANUP_COMMAND="bash $CONFIG_DIR/cleanup.sh"
+        CLEANUP_COMMAND="sudo bash $CONFIG_DIR/cleanup.sh"
 
     print_info "Quick usage info will appear on the next SSH login."
 }

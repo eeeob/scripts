@@ -125,7 +125,7 @@ add_ssh_quick_info() {
     print_step "Adding quick usage info to the SSH login screen"
 
     _add_motd_info "ufw" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
-        CONFIG_FILE="$CONFIG_FILE" CLEANUP_COMMAND="bash $CONFIG_DIR/cleanup.sh"
+        CONFIG_FILE="$CONFIG_FILE" CLEANUP_COMMAND="sudo bash $CONFIG_DIR/cleanup.sh"
 
     print_info "Quick usage info will appear on the next SSH login."
 }
