@@ -246,7 +246,7 @@ write_config() {
 add_ssh_quick_info() {
     print_step "Adding quick usage info to the SSH login screen"
 
-    local status_command logs_command shell_command restart_command cleanup_command
+    local status_command logs_command shell_command restart_command
 
     if [ "$INSTALL_METHOD" = "native" ]; then
         restart_command="sudo systemctl restart mongod"
@@ -260,12 +260,10 @@ add_ssh_quick_info() {
         shell_command="sudo docker exec -it $DOCKER_CONTAINER_NAME mongosh"
     fi
 
-    cleanup_command="sudo bash $CONFIG_DIR/cleanup.sh"
-
     _add_motd_info "mongodb" "$TEMP_CONFIG_DIR/motd-info.sh.tmpl" \
         RESTART_COMMAND="$restart_command" \
         STATUS_COMMAND="$status_command" \
-        CLEANUP_COMMAND="$cleanup_command" \
+        CLEANUP_COMMAND="sudo bash $CONFIG_DIR/cleanup.sh" \
         LOGS_COMMAND="$logs_command" \
         SHELL_COMMAND="$shell_command" \
         CONFIG_FILE="$CONFIG_FILE"

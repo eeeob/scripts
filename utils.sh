@@ -492,26 +492,13 @@ _handle_existing_config_file() {
         exit 0
     fi
 
-    local service cleanup_command
-    service=$(_read_config_value "$config_file" SERVICE)
+    local cleanup_command
     cleanup_command=$(_read_config_value "$config_file" CLEANUP_COMMAND)
 
     if [ -n "$cleanup_command" ]; then
-        print_step "Cleaning up previous '${service:-unknown}' installation"
         sudo bash -c "$cleanup_command" || print_warning "Cleanup command finished with errors. Continuing anyway."
     else
         print_warning "No CLEANUP_COMMAND found in the config. Only the config file will be removed."
-    fi
-
-    # حذف معلومات MOTD الخاصة بالخدمة إن وجدت
-    [ -n "$service" ] && sudo rm -f "/etc/update-motd.d/99-${service}-info"
-
-    # حذف ملف الكونفج، ومجلد الخدمة كاملاً إذا كان لها مجلد خاص داخل /root/.configs
-    local parent_dir
-    parent_dir=$(dirname "$config_file")
-    sudo rm -f "$config_file"
-    if [ "$parent_dir" != "/root/.configs" ]; then
-        sudo rm -rf "$parent_dir"
     fi
 
     print_info "Previous installation cleaned up. Continuing with a fresh setup..."
