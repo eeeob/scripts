@@ -29,6 +29,7 @@ BIND_IP=""
 INSTALL_METHOD=""
 
 
+
 #native
 UBUNTU_CODENAME=$(_get_ubuntu_codename "20.04 22.04 24.04")
 
@@ -112,20 +113,6 @@ install() {
 
 
 
-_ensure_ufw_not_blocking_mongo() {
-    _package_installed ufw || return 0
-    sudo ufw status 2>/dev/null | grep -q "Status: active" || return 0
-
-    if sudo ufw status | grep -E "\b${PORT}\b" | grep -qiE '\b(DENY|REJECT)\b'; then
-        print_warning "Firewall has a blocking rule for port $PORT. Removing it so MongoDB controls access itself via bindIp..."
-        sudo ufw delete deny "$PORT/tcp" >/dev/null 2>&1 || true
-        sudo ufw delete reject "$PORT/tcp" >/dev/null 2>&1 || true
-        sudo ufw delete deny "$PORT" >/dev/null 2>&1 || true
-        sudo ufw delete reject "$PORT" >/dev/null 2>&1 || true
-        print_info "Firewall blocking rule(s) for port $PORT removed."
-    fi
-}
-
 install_native() {
     if _package_installed mongodb-org || _package_installed mongod || _service_exists mongod; then
         print_error "A native MongoDB installation still exists. Aborting to avoid a broken setup."
@@ -152,14 +139,11 @@ install_native() {
     sudo systemctl enable mongod >/dev/null 2>&1
     sudo systemctl restart mongod
 
-    
-
     BIND_IP="127.0.0.1"
 
     if ! _confirm "Make MongoDB accessible to Docker containers via docker0 (172.17.0.1)? (y/n): "; then
         print_info "Skipping Docker access configuration."
         _wait_for_service "mongod" 10
-        _ensure_ufw_not_blocking_mongo
         return 0
     fi
 
@@ -181,7 +165,11 @@ install_native() {
     print_info "MongoDB is now bound to 127.0.0.1 and 172.17.0.1 with a systemd dependency on docker.service."
 
     _wait_for_service "mongod" 10
-    _ensure_ufw_not_blocking_mongo
+
+    if _package_installed ufw && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+        sudo ufw allow to 172.17.0.1 port "$PORT" proto tcp
+    fi
+
     
 }
 
