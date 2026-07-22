@@ -152,13 +152,14 @@ install_native() {
     sudo systemctl enable mongod >/dev/null 2>&1
     sudo systemctl restart mongod
 
-    _ensure_ufw_not_blocking_mongo
+    
 
     BIND_IP="127.0.0.1"
 
     if ! _confirm "Make MongoDB accessible to Docker containers via docker0 (172.17.0.1)? (y/n): "; then
         print_info "Skipping Docker access configuration."
         _wait_for_service "mongod" 10
+        _ensure_ufw_not_blocking_mongo
         return 0
     fi
 
@@ -180,6 +181,7 @@ install_native() {
     print_info "MongoDB is now bound to 127.0.0.1 and 172.17.0.1 with a systemd dependency on docker.service."
 
     _wait_for_service "mongod" 10
+    _ensure_ufw_not_blocking_mongo
     
 }
 
