@@ -42,6 +42,7 @@ NGINX_CONFIG_DIR="/etc/nginx/conf.d"
 SERVER_NAME=""        # الدومين
 INSTALL_METHOD=""     # native | docker
 CLOUDFLARE=""         # yes | no
+FIREWALL_INFO=""
 
 #docker
 DOCKER_COMPOSE_FILE="$CONFIG_DIR/docker-compose.yml"
@@ -315,10 +316,12 @@ install_native() {
         if _install_nginx_ufw_profile; then
             sudo ufw allow 'Nginx Full' >/dev/null 2>&1 || true
             print_info "Allowed 'Nginx Full' (ports 80,443) through ufw."
+            FIREWALL_INFO="ufw: allowed 'Nginx Full' (ports 80,443/tcp)"
         else
             print_warning "Nginx ufw profile unavailable; allowing ports 80/443 directly."
             sudo ufw allow 80/tcp >/dev/null 2>&1 || true
             sudo ufw allow 443/tcp >/dev/null 2>&1 || true
+            FIREWALL_INFO="ufw: allowed 80/tcp and 443/tcp directly"
         fi
     fi
 
@@ -441,7 +444,8 @@ add_ssh_quick_info() {
         TEST_COMMAND="$test_command" \
         STATUS_COMMAND="$status_command" \
         LOGS_COMMAND="$logs_command" \
-        CLEANUP_COMMAND="sudo bash $CONFIG_DIR/cleanup.sh"
+        CLEANUP_COMMAND="sudo bash $CONFIG_DIR/cleanup.sh" \
+        FIREWALL_INFO="$FIREWALL_INFO"
 
     print_info "Quick usage info will appear on the next SSH login."
 }

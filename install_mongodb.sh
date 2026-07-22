@@ -29,6 +29,7 @@ BIND_IP=""
 INSTALL_METHOD=""
 
 STOP_UFW=""
+FIREWALL_INFO=""
 
 
 
@@ -173,6 +174,7 @@ install_native() {
     if _package_installed ufw && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
         sudo ufw allow to 172.17.0.1 port "$PORT" proto tcp
         STOP_UFW="ufw delete allow to 172.17.0.1 port $PORT proto tcp"
+        FIREWALL_INFO="ufw: allowed 172.17.0.1 -> port $PORT/tcp (Docker access)"
     fi
 
     
@@ -266,7 +268,8 @@ add_ssh_quick_info() {
         CLEANUP_COMMAND="sudo bash $CONFIG_DIR/cleanup.sh" \
         LOGS_COMMAND="$logs_command" \
         SHELL_COMMAND="$shell_command" \
-        CONFIG_FILE="$CONFIG_FILE"
+        CONFIG_FILE="$CONFIG_FILE" \
+        FIREWALL_INFO="$FIREWALL_INFO"
 
     print_info "Quick usage info will appear on the next SSH login."
 }
