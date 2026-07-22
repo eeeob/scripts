@@ -28,6 +28,8 @@ PORT="27017"
 BIND_IP=""
 INSTALL_METHOD=""
 
+STOP_UFW=""
+
 
 
 #native
@@ -168,6 +170,7 @@ install_native() {
 
     if _package_installed ufw && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
         sudo ufw allow to 172.17.0.1 port "$PORT" proto tcp
+        STOP_UFW="ufw delete allow to 172.17.0.1 port $PORT proto tcp"
     fi
 
     
@@ -212,6 +215,7 @@ write_config() {
 
     if [ "$INSTALL_METHOD" = "native" ]; then
         _render_template_file "$TEMP_CONFIG_DIR/cleanup_native.sh.template" "$cleanup_script" \
+            STOP_UFW \
             APT_SOURCE_FILE="/etc/apt/sources.list.d/mongodb-org-${MONGO_VERSION}.list" \
             KEYRING_FILE="/usr/share/keyrings/mongodb-server-${MONGO_VERSION}.gpg"
     else
