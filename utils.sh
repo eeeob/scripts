@@ -580,12 +580,12 @@ _clone_or_update_project() {
     print_step "Clone or update project"
     _ensure_packages git
 
+
     if [ -d "$project_dir/.git" ]; then
         print_info "Project already exists. Pulling latest changes..."
-        cd "$project_dir"
-        git fetch --all
-        git reset --hard "origin/$branch"
-        return
+        git -C "$project_dir" fetch --all
+        git -C "$project_dir" reset --hard "origin/$branch"
+        return 0
     fi
 
     print_info "Cloning project..."
